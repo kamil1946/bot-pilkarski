@@ -10,7 +10,6 @@ from datetime import datetime
 WEBHOOK_URL = "https://discord.com/api/webhooks/1567194433563398264/v9SIVA2FryrdOCx5RlxxbLsCpqbW3MJWI9TdRpePDd4yvg0f0t525Dp03GULH5YnFgzY"
 HISTORY_FILE = "sent_news.txt"
 
-# KONFIGURACJA REPOZYTORIUM STRONY (ZMIEŃ 'TWOJ_NICK' NA SWOJĄ NAZWĘ UŻYTKOWNIKA GITHUB!)
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
 GITHUB_FILE_PATH = "news.json"
 GH_TOKEN = os.environ.get("GH_TOKEN", "")
@@ -18,7 +17,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 RSS_FEEDS = [
     "https://feeds.bbci.co.uk/sport/football/rss.xml",
-    "https://www.skysports.com/rss/12040"
+    "https://www.skysports.com/rss/11095"
 ]
 
 def load_sent_news():
@@ -34,7 +33,7 @@ def save_sent_news(sent_links):
 
 def detect_category(title, full_text=""):
     t = (title + " " + full_text[:400]).lower()
-    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham"]):
+    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace"]):
         return "PL", "Premier League", "bg-purple-600"
     if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "atletico", "mbappe", "vinicius", "yamal", "sevilla"]):
         return "LL", "La Liga", "bg-red-600"
@@ -51,7 +50,6 @@ def clean_html(raw_html):
     return html.unescape(text).strip()
 
 def fetch_source_facts(url, fallback_summary):
-    """Pobiera tekst ze źródła wyłącznie jako kontekst do streszczenia faktów przez AI."""
     try:
         req = urllib.request.Request(url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -77,26 +75,27 @@ def fetch_source_facts(url, fallback_summary):
     return fallback_summary
 
 def summarize_in_polish_with_gemini(orig_title, source_text, source_name):
-    """Tworzy krótkie, autorskie podsumowanie faktów po polsku (bez kopiowania artykułu)."""
     if not GEMINI_API_KEY:
+        print("Brak GEMINI_API_KEY w zmiennych środowiskowych!")
         return orig_title, source_text[:180], f"<p>{source_text[:250]}...</p>"
 
-    prompt = f"""Jesteś redaktorem polskiego portalu piłkarskiego PITCH ZONE.
-Na podstawie poniższych informacji ze źródła ({source_name}) przygotuj krótkie, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).
+    prompt = (
+        f"Jesteś redaktorem polskiego portalu piłkarskiego PITCH ZONE.\n"
+        f"Na podstawie poniższych informacji ze źródła ({source_name}) przygotuj krótkie, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
+        f"Wymagania:\n"
+        f"1. Podaj konkretne fakty: kto, co się stało, kiedy, jaki klub/liga, szczegóły kontuzji/transferu/wyniku.\n"
+        f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników ```json) z trzema polami:\n"
+        f'- "title": krótki, dynamiczny nagłówek po polsku (max 85 znaków)\n'
+        f'- "summary": zajawka 1-2 zdania po polsku (max 180 znaków)\n'
+        f'- "paragraphs": lista 2 lub 3 krótkich akapitów po polsku opisujących kluczowe fakty\n\n'
+        f"Oryginalny tytuł: {orig_title}\n"
+        f"Materiał źródłowy:\n{source_text[:3000]}"
+    )
 
-Wymagania:
-1. Podaj konkretne fakty: kto, co się stało, kiedy, jaki klub/liga, szczegóły kontuzji/transferu/wyniku.
-2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown ```json) z trzema polami:
-- "title": krótki, dynamiczny nagłówek po polsku (max 85 znaków)
-- "summary": zajawka 1-2 zdania po polsku (max 180 znaków)
-- "paragraphs": lista 2 lub 3 krótkich akapitów po polsku opisujących kluczowe fakty
+    host = "generativelanguage.googleapis.com"
+    path = f"/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    api_url = "https://" + host + path
 
-Oryginalny tytuł: {orig_title}
-Materiał źródłowy:
-{source_text[:3000]}
-"""
-
-    api_url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=){GEMINI_API_KEY}"
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.4}
@@ -104,10 +103,9 @@ Materiał źródłowy:
 
     try:
         req = urllib.request.Request(api_url, data=payload, headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=20) as res:
+        with urllib.request.urlopen(req, timeout=25) as res:
             data = json.loads(res.read().decode('utf-8'))
             raw_reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            # Usuwamy ewentualne bloki ```json ... ```
             raw_reply = re.sub(r'^```json\s*|\s*```$', '', raw_reply, flags=re.IGNORECASE).strip()
             parsed = json.loads(raw_reply)
 
@@ -115,6 +113,7 @@ Materiał źródłowy:
             pl_summary = parsed.get("summary", "")
             paragraphs = parsed.get("paragraphs", [])
             html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
+            print(f"Gemini AI wygenerowało: {pl_title}")
             return pl_title, pl_summary, html_body
     except Exception as e:
         print(f"Błąd Gemini AI (używam fallbacku): {e}")
@@ -141,7 +140,7 @@ def push_news_to_website(new_articles):
         print("Pominięto aktualizację strony (brak GH_TOKEN lub brak nowych artykułów).")
         return
 
-    api_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+    api_url = "https://" + f"[api.github.com/repos/](https://api.github.com/repos/){GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
     headers = {
         "Authorization": f"token {GH_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
