@@ -6,6 +6,7 @@ import os
 import base64
 import re
 import html
+import time
 from datetime import datetime
 
 PROTO = "https" + "://"
@@ -77,7 +78,31 @@ def fetch_source_facts(url, fallback_summary):
         print(f"Nie udało się odczytać źródła {url}: {e}")
     return fallback_summary
 
-def summarize_in_polish_with_gemini(orig_title, source_text, source_name):
+def get_available_flash_models():
+    """Pobiera aktualną listę aktywnych modeli Flash dla Twojego klucza API."""
+    fallback_models = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
+    if not GEMINI_API_KEY:
+        return fallback_models
+    try:
+        list_url = PROTO + f"generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        req = urllib.request.Request(list_url)
+        with urllib.request.urlopen(req, timeout=10) as res:
+            data = json.loads(res.read().decode('utf-8'))
+            found = []
+            for m in data.get("models", []):
+                name = m.get("name", "").replace("models/", "")
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods and "flash" in name and "2.0" not in name and "2.5-flash" != name:
+                    found.append(name)
+            if found:
+                # Preferujemy lite/latest na początek
+                found.sort(key=lambda x: (0 if "lite" in x or "latest" in x else 1, x))
+                return found[:4]
+    except Exception:
+        pass
+    return fallback_models
+
+def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models_list):
     if not GEMINI_API_KEY:
         print("BŁĄD: Brak klucza GEMINI_API_KEY!")
         return orig_title, source_text[:180], f"<p>{source_text[:300]}</p>"
@@ -92,7 +117,7 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name):
         f'- "summary": zajawka 1-2 zdania po polsku z głównym faktem (max 190 znaków)\n'
         f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących szczegóły wydarzenia\n\n'
         f"Oryginalny tytuł: {orig_title}\n"
-        f"Treść artykułu źródłowego:\n{source_text[:4000]}"
+        f"Treść artykułu źródłowego:\n{source_text[:3500]}"
     )
 
     payload = json.dumps({
@@ -100,33 +125,35 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name):
         "generationConfig": {"temperature": 0.4}
     }).encode('utf-8')
 
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
-
-    for model_name in models_to_try:
+    for model_name in models_list:
         api_url = PROTO + f"generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        try:
-            req = urllib.request.Request(api_url, data=payload, headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=25) as res:
-                data = json.loads(res.read().decode('utf-8'))
-                raw_reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                raw_reply = re.sub(r'^```json\s*|\s*```$', '', raw_reply, flags=re.IGNORECASE).strip()
-                parsed = json.loads(raw_reply)
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(api_url, data=payload, headers={'Content-Type': 'application/json'})
+                with urllib.request.urlopen(req, timeout=30) as res:
+                    data = json.loads(res.read().decode('utf-8'))
+                    raw_reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    raw_reply = re.sub(r'^```json\s*|\s*```$', '', raw_reply, flags=re.IGNORECASE).strip()
+                    parsed = json.loads(raw_reply)
 
-                pl_title = parsed.get("title", orig_title)
-                pl_summary = parsed.get("summary", "")
-                paragraphs = parsed.get("paragraphs", [])
-                html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
-                print(f"SUKCES Gemini ({model_name}): {pl_title}")
-                return pl_title, pl_summary, html_body
-        except urllib.error.HTTPError as he:
-            err_body = he.read().decode('utf-8', errors='ignore')
-            print(f"Błąd HTTP Gemini ({model_name}): {he.code} - {err_body[:150]}")
-            if he.code == 404:
-                continue
-            break
-        except Exception as e:
-            print(f"Błąd Gemini AI ({model_name}): {e}")
-            break
+                    pl_title = parsed.get("title", orig_title)
+                    pl_summary = parsed.get("summary", "")
+                    paragraphs = parsed.get("paragraphs", [])
+                    html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
+                    print(f"SUKCES Gemini ({model_name}): {pl_title}")
+                    return pl_title, pl_summary, html_body
+            except urllib.error.HTTPError as he:
+                if he.code in (429, 503) and attempt == 0:
+                    print(f"Model {model_name} chwilowo zajęty ({he.code}), czekam 8s...")
+                    time.sleep(8)
+                    continue
+                if he.code == 404:
+                    break
+                print(f"Błąd HTTP Gemini ({model_name}): {he.code}")
+                break
+            except Exception as e:
+                print(f"Błąd Gemini AI ({model_name}): {e}")
+                break
 
     return orig_title, source_text[:180], f"<p>{source_text[:350]}</p>"
 
@@ -189,6 +216,8 @@ def check_news():
     sent_links = load_sent_news()
     new_sent_count = 0
     website_batch = []
+    models_list = get_available_flash_models()
+    print(f"Aktywne modele Gemini: {models_list}")
 
     for url in RSS_FEEDS:
         try:
@@ -199,7 +228,7 @@ def check_news():
             root = ET.fromstring(xml_data)
             source = "BBC Sport" if "bbci" in url else "Sky Sports"
 
-            items = root.findall('.//item')[:4]
+            items = root.findall('.//item')[:3]
             for item in reversed(items):
                 title_elem = item.find('title')
                 link_elem = item.find('link')
@@ -218,8 +247,13 @@ def check_news():
                                 break
 
                     if link not in sent_links:
+                        if new_sent_count > 0:
+                            time.sleep(6)
+
                         source_context = fetch_source_facts(link, rss_summary)
-                        pl_title, pl_summary, pl_html_body = summarize_in_polish_with_gemini(orig_title, source_context, source)
+                        pl_title, pl_summary, pl_html_body = summarize_in_polish_with_gemini(
+                            orig_title, source_context, source, models_list
+                        )
 
                         send_to_discord(pl_title, pl_summary, link, source)
                         sent_links.add(link)
