@@ -18,9 +18,12 @@ GITHUB_FILE_PATH = "news.json"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
+# Rozszerzona lista źródeł RSS (główne serwisy + dedykowane ligi)
 RSS_FEEDS = [
     PROTO + "feeds.bbci.co.uk/sport/football/rss.xml",
-    PROTO + "www.skysports.com/rss/11095"
+    PROTO + "www.skysports.com/rss/11095",
+    PROTO + "www.skysports.com/rss/12040",  # Serie A
+    PROTO + "www.skysports.com/rss/11881",  # Bundesliga
 ]
 
 def load_sent_news():
@@ -81,7 +84,6 @@ def fetch_source_facts(url, fallback_summary):
     return fallback_summary
 
 def get_available_flash_models():
-    """Pobiera aktualną listę aktywnych modeli Flash dla Twojego klucza API."""
     fallback_models = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
     if not GEMINI_API_KEY:
         return fallback_models
@@ -97,7 +99,6 @@ def get_available_flash_models():
                 if "generateContent" in methods and "flash" in name and "2.0" not in name and "2.5-flash" != name:
                     found.append(name)
             if found:
-                # Preferujemy lite/latest na początek
                 found.sort(key=lambda x: (0 if "lite" in x or "latest" in x else 1, x))
                 return found[:4]
     except Exception:
@@ -146,15 +147,12 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models
                     return pl_title, pl_summary, html_body
             except urllib.error.HTTPError as he:
                 if he.code in (429, 503) and attempt == 0:
-                    print(f"Model {model_name} chwilowo zajęty ({he.code}), czekam 8s...")
                     time.sleep(8)
                     continue
                 if he.code == 404:
                     break
-                print(f"Błąd HTTP Gemini ({model_name}): {he.code}")
                 break
-            except Exception as e:
-                print(f"Błąd Gemini AI ({model_name}): {e}")
+            except Exception:
                 break
 
     return orig_title, source_text[:180], f"<p>{source_text[:350]}</p>"
@@ -169,15 +167,12 @@ def send_to_discord(title, summary, link, source):
         headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
     )
     try:
-        with urllib.request.urlopen(req) as response:
-            if response.status in (200, 204):
-                print(f"Wysłano na Discorda: {title}")
-    except Exception as e:
-        print(f"Błąd wysyłki na Discorda: {e}")
+        urllib.request.urlopen(req)
+    except Exception:
+        pass
 
 def push_news_to_website(new_articles):
     if not GH_TOKEN or not new_articles:
-        print("Pominięto aktualizację strony.")
         return
 
     api_url = PROTO + f"api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
@@ -208,18 +203,15 @@ def push_news_to_website(new_articles):
         }).encode('utf-8')
 
         put_req = urllib.request.Request(api_url, data=payload, headers=headers, method="PUT")
-        with urllib.request.urlopen(put_req) as put_res:
-            if put_res.status in (200, 201):
-                print(f"SUKCES! Zaktualizowano news.json (+{len(new_articles)} newsów)!")
-    except Exception as e:
-        print(f"Błąd aktualizacji news.json na GitHubie: {e}")
+        urllib.request.urlopen(put_req)
+    except Exception:
+        pass
 
 def check_news():
     sent_links = load_sent_news()
     new_sent_count = 0
     website_batch = []
     models_list = get_available_flash_models()
-    print(f"Aktywne modele Gemini: {models_list}")
 
     for url in RSS_FEEDS:
         try:
@@ -250,7 +242,7 @@ def check_news():
 
                     if link not in sent_links:
                         if new_sent_count > 0:
-                            time.sleep(6)
+                            time.sleep(5)
 
                         source_context = fetch_source_facts(link, rss_summary)
                         pl_title, pl_summary, pl_html_body = summarize_in_polish_with_gemini(
@@ -276,15 +268,12 @@ def check_news():
                             "content": f"{pl_html_body}<p class='pt-3 border-t border-gray-100 dark:border-border text-xs text-gray-400'>Podsumowanie faktów opracowane na podstawie publikacji {source}. <a href='{link}' target='_blank' rel='noopener' class='text-purple-500 font-bold underline ml-1'>Przeczytaj oryginalny artykuł →</a></p>"
                         })
 
-        except Exception as e:
-            print(f"Błąd podczas przetwarzania {url}: {e}")
+        except Exception:
+            pass
 
     if new_sent_count > 0:
         save_sent_news(sent_links)
         push_news_to_website(website_batch)
-        print(f"Zapisano {new_sent_count} nowych podsumowań.")
-    else:
-        print("Brak nowych newsów do wysłania.")
 
 if __name__ == "__main__":
     check_news()
