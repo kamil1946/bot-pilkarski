@@ -36,15 +36,17 @@ def save_sent_news(sent_links):
 
 def detect_category(title, full_text=""):
     t = (title + " " + full_text[:500]).lower()
+    if any(k in t for k in ["ekstraklasa", "legia", "lech poznań", "raków", "jagiellonia", "pogoń szczecin", "górnik zabrze", "śląsk wrocław", "cracovia", "widzew", "motor lublin", "piast gliwice"]):
+        return "EKS", "Ekstraklasa", "bg-rose-600"
     if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves"]):
         return "PL", "Premier League", "bg-purple-600"
-    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "atletico", "mbappe", "vinicius", "yamal", "sevilla", "espanyol", "athletic"]):
+    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "atletico", "mbappe", "vinicius", "yamal", "sevilla", "espanyol", "athletic bilbao", "real sociedad", "villarreal"]):
         return "LL", "La Liga", "bg-red-600"
-    if any(k in t for k in ["champions league", "liga mistrzów", "uefa", "europa league", "liga europy"]):
-        return "CL", "Liga Mistrzów", "bg-blue-600"
-    if any(k in t for k in ["world cup", "mistrzostwa świata", "euro", "england", "anglia", "poland", "polska", "france", "francja", "spain", "hiszpania", "germany", "niemcy", "brazil", "argentina", "reprezentacj", "scotland", "szkocj"]):
-        return "REP", "Reprezentacje", "bg-emerald-600"
-    return "WORLD", "Piłka Nożna", "bg-purple-600"
+    if any(k in t for k in ["serie a", "juventus", "inter mediolan", "inter milan", "ac milan", "napoli", "as roma", "lazio", "atalanta", "fiorentina", "bologna"]):
+        return "SA", "Serie A", "bg-sky-600"
+    if any(k in t for k in ["bundesliga", "bayern", "borussia", "dortmund", "bayer leverkusen", "rb leipzig", "eintracht", "stuttgart", "wolfsburg"]):
+        return "BL", "Bundesliga", "bg-amber-600"
+    return "OTHER", "Inne Ligi", "bg-emerald-600"
 
 def clean_html(raw_html):
     if not raw_html:
