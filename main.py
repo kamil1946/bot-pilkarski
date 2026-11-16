@@ -8,7 +8,8 @@ import re
 import html
 from datetime import datetime
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/1567194433563398264/v9SIVA2FryrdOCx5RlxxbLsCpqbW3MJWI9TdRpePDd4yvg0f0t525Dp03GULH5YnFgzY"
+PROTO = "https" + "://"
+WEBHOOK_URL = PROTO + "discord.com/api/webhooks/1567194433563398264/v9SIVA2FryrdOCx5RlxxbLsCpqbW3MJWI9TdRpePDd4yvg0f0t525Dp03GULH5YnFgzY"
 HISTORY_FILE = "sent_news.txt"
 
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
@@ -17,8 +18,8 @@ GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 RSS_FEEDS = [
-    "https://feeds.bbci.co.uk/sport/football/rss.xml",
-    "https://www.skysports.com/rss/11095"
+    PROTO + "feeds.bbci.co.uk/sport/football/rss.xml",
+    PROTO + "www.skysports.com/rss/11095"
 ]
 
 def load_sent_news():
@@ -33,14 +34,14 @@ def save_sent_news(sent_links):
             f.write(f"{link}\n")
 
 def detect_category(title, full_text=""):
-    t = (title + " " + full_text[:400]).lower()
-    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace"]):
+    t = (title + " " + full_text[:500]).lower()
+    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves"]):
         return "PL", "Premier League", "bg-purple-600"
-    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "atletico", "mbappe", "vinicius", "yamal", "sevilla"]):
+    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "atletico", "mbappe", "vinicius", "yamal", "sevilla", "espanyol", "athletic"]):
         return "LL", "La Liga", "bg-red-600"
     if any(k in t for k in ["champions league", "liga mistrzów", "uefa", "europa league", "liga europy"]):
         return "CL", "Liga Mistrzów", "bg-blue-600"
-    if any(k in t for k in ["world cup", "mistrzostwa świata", "euro", "england", "anglia", "poland", "polska", "france", "francja", "spain", "hiszpania", "germany", "niemcy", "brazil", "argentina", "reprezentacj"]):
+    if any(k in t for k in ["world cup", "mistrzostwa świata", "euro", "england", "anglia", "poland", "polska", "france", "francja", "spain", "hiszpania", "germany", "niemcy", "brazil", "argentina", "reprezentacj", "scotland", "szkocj"]):
         return "REP", "Reprezentacje", "bg-emerald-600"
     return "WORLD", "Piłka Nożna", "bg-purple-600"
 
@@ -55,17 +56,18 @@ def fetch_source_facts(url, fallback_summary):
         req = urllib.request.Request(url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        with urllib.request.urlopen(req, timeout=10) as res:
+        with urllib.request.urlopen(req, timeout=12) as res:
             page_html = res.read().decode('utf-8', errors='ignore')
 
-        page_html = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', page_html, flags=re.DOTALL | re.IGNORECASE)
+        page_html = re.sub(r'<(script|style|nav|header|footer)[^>]*>.*?</\1>', '', page_html, flags=re.DOTALL | re.IGNORECASE)
         raw_paragraphs = re.findall(r'<p[^>]*>(.*?)</p>', page_html, flags=re.DOTALL | re.IGNORECASE)
 
         paragraphs = []
         for p in raw_paragraphs:
             text = clean_html(p)
-            if len(text) >= 60:
-                paragraphs.append(text)
+            if len(text) >= 100 and "football f1" not in text.lower() and "cookie" not in text.lower():
+                if text not in paragraphs:
+                    paragraphs.append(text)
             if len(paragraphs) >= 10:
                 break
 
@@ -77,20 +79,20 @@ def fetch_source_facts(url, fallback_summary):
 
 def summarize_in_polish_with_gemini(orig_title, source_text, source_name):
     if not GEMINI_API_KEY:
-        print("Brak GEMINI_API_KEY!")
-        return orig_title, source_text[:180], f"<p>{source_text[:250]}...</p>"
+        print("BŁĄD: Brak klucza GEMINI_API_KEY!")
+        return orig_title, source_text[:180], f"<p>{source_text[:300]}</p>"
 
     prompt = (
         f"Jesteś redaktorem polskiego portalu piłkarskiego PITCH ZONE.\n"
-        f"Na podstawie poniższych informacji ze źródła ({source_name}) przygotuj konkretne, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
+        f"Na podstawie poniższego artykułu ze źródła ({source_name}) napisz konkretne, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
         f"Wymagania:\n"
-        f"1. Podaj konkretne szczegóły z tekstu: kto, co się stało, kiedy, jaki klub/liga, szczegóły kontuzji, wypowiedzi, transferu lub wyniku.\n"
+        f"1. Wyciągnij najważniejsze detale z tekstu: nazwiska piłkarzy i trenerów, nazwy klubów, dokładny powód (np. jaka kontuzja, na ile wypada, jaki wynik, co dokładnie powiedział trener).\n"
         f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown) z trzema polami:\n"
-        f'- "title": krótki, dynamiczny nagłówek po polsku (max 85 znaków)\n'
-        f'- "summary": zajawka 1-2 zdania po polsku z najważniejszym faktem (max 190 znaków)\n'
-        f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących wszystkie ważne fakty z materiału\n\n'
+        f'- "title": dynamiczny nagłówek po polsku (max 85 znaków)\n'
+        f'- "summary": zajawka 1-2 zdania po polsku z głównym faktem (max 190 znaków)\n'
+        f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących szczegóły wydarzenia\n\n'
         f"Oryginalny tytuł: {orig_title}\n"
-        f"Materiał źródłowy:\n{source_text[:3500]}"
+        f"Treść artykułu źródłowego:\n{source_text[:4000]}"
     )
 
     payload = json.dumps({
@@ -98,12 +100,10 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name):
         "generationConfig": {"temperature": 0.4}
     }).encode('utf-8')
 
-    # Próbujemy po kolei aktualne modele Gemini
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
-    
+
     for model_name in models_to_try:
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        api_url = re.sub(r'[\[\]]', '', api_url)
+        api_url = PROTO + f"generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         try:
             req = urllib.request.Request(api_url, data=payload, headers={'Content-Type': 'application/json'})
             with urllib.request.urlopen(req, timeout=25) as res:
@@ -116,26 +116,26 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name):
                 pl_summary = parsed.get("summary", "")
                 paragraphs = parsed.get("paragraphs", [])
                 html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
-                print(f"Gemini AI ({model_name}) wygenerowało: {pl_title}")
+                print(f"SUKCES Gemini ({model_name}): {pl_title}")
                 return pl_title, pl_summary, html_body
         except urllib.error.HTTPError as he:
+            err_body = he.read().decode('utf-8', errors='ignore')
+            print(f"Błąd HTTP Gemini ({model_name}): {he.code} - {err_body[:150]}")
             if he.code == 404:
                 continue
-            print(f"Błąd HTTP Gemini ({model_name}): {he.code} {he.reason}")
             break
         except Exception as e:
             print(f"Błąd Gemini AI ({model_name}): {e}")
             break
 
-    return orig_title, source_text[:180], f"<p>{source_text[:220]}...</p>"
+    return orig_title, source_text[:180], f"<p>{source_text[:350]}</p>"
 
 def send_to_discord(title, summary, link, source):
     message = {
         "content": f"🚨 **NOWY NEWS PIŁKARSKI ({source})**\n\n**{title}**\n{summary}\n\n🔗 Pełny artykuł źródłowy: {link}"
     }
-    clean_webhook = re.sub(r'[\[\]]', '', WEBHOOK_URL)
     req = urllib.request.Request(
-        clean_webhook,
+        WEBHOOK_URL,
         data=json.dumps(message).encode('utf-8'),
         headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
     )
@@ -148,12 +148,10 @@ def send_to_discord(title, summary, link, source):
 
 def push_news_to_website(new_articles):
     if not GH_TOKEN or not new_articles:
-        print("Pominięto aktualizację strony (brak GH_TOKEN lub brak nowych artykułów).")
+        print("Pominięto aktualizację strony.")
         return
 
-    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
-    api_url = re.sub(r'[\[\]]', '', api_url)
-    
+    api_url = PROTO + f"api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
     headers = {
         "Authorization": f"token {GH_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
@@ -183,7 +181,7 @@ def push_news_to_website(new_articles):
         put_req = urllib.request.Request(api_url, data=payload, headers=headers, method="PUT")
         with urllib.request.urlopen(put_req) as put_res:
             if put_res.status in (200, 201):
-                print(f"SUKCES! Zaktualizowano news.json na stronie (+{len(new_articles)} newsów)!")
+                print(f"SUKCES! Zaktualizowano news.json (+{len(new_articles)} newsów)!")
     except Exception as e:
         print(f"Błąd aktualizacji news.json na GitHubie: {e}")
 
@@ -192,28 +190,27 @@ def check_news():
     new_sent_count = 0
     website_batch = []
 
-    for raw_url in RSS_FEEDS:
-        url = re.sub(r'[\[\]]', '', raw_url)
+    for url in RSS_FEEDS:
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as response:
                 xml_data = response.read()
-            
+
             root = ET.fromstring(xml_data)
             source = "BBC Sport" if "bbci" in url else "Sky Sports"
-            
+
             items = root.findall('.//item')[:4]
             for item in reversed(items):
                 title_elem = item.find('title')
                 link_elem = item.find('link')
                 desc_elem = item.find('description')
-                
+
                 if title_elem is not None and link_elem is not None:
                     orig_title = clean_html(title_elem.text)
                     link = link_elem.text.strip()
                     rss_summary = clean_html(desc_elem.text) if desc_elem is not None else ""
-                    
-                    img_url = "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1000&q=80"
+
+                    img_url = PROTO + "images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1000&q=80"
                     for child in item:
                         if 'thumbnail' in child.tag or 'content' in child.tag or 'enclosure' in child.tag:
                             if child.attrib.get('url'):
@@ -242,7 +239,7 @@ def check_news():
                             "summary": pl_summary,
                             "content": f"{pl_html_body}<p class='pt-3 border-t border-gray-100 dark:border-border text-xs text-gray-400'>Podsumowanie faktów opracowane na podstawie publikacji {source}. <a href='{link}' target='_blank' rel='noopener' class='text-purple-500 font-bold underline ml-1'>Przeczytaj oryginalny artykuł →</a></p>"
                         })
-                        
+
         except Exception as e:
             print(f"Błąd podczas przetwarzania {url}: {e}")
 
