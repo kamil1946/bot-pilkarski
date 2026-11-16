@@ -22,3 +22,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
+
+      - name: Zapisz historię wysłanych linków
+        run: |
+          git config user.name "PitchZone Bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add sent_news.txt
+          git diff --staged --quiet || (git commit -m "Aktualizacja historii linków" && git push)
