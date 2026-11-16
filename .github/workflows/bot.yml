@@ -21,4 +21,9 @@ jobs:
       - name: Uruchom bota
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          - name: Uruchom bota
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python main.py
         run: python main.py
