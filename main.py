@@ -1,4 +1,5 @@
 import urllib.request
+import urllib.error
 import xml.etree.ElementTree as ET
 import json
 import os
@@ -12,8 +13,8 @@ HISTORY_FILE = "sent_news.txt"
 
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
 GITHUB_FILE_PATH = "news.json"
-GH_TOKEN = os.environ.get("GH_TOKEN", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 RSS_FEEDS = [
     "https://feeds.bbci.co.uk/sport/football/rss.xml",
@@ -65,7 +66,7 @@ def fetch_source_facts(url, fallback_summary):
             text = clean_html(p)
             if len(text) >= 60:
                 paragraphs.append(text)
-            if len(paragraphs) >= 8:
+            if len(paragraphs) >= 10:
                 break
 
         if paragraphs:
@@ -76,55 +77,65 @@ def fetch_source_facts(url, fallback_summary):
 
 def summarize_in_polish_with_gemini(orig_title, source_text, source_name):
     if not GEMINI_API_KEY:
-        print("Brak GEMINI_API_KEY w zmiennych środowiskowych!")
+        print("Brak GEMINI_API_KEY!")
         return orig_title, source_text[:180], f"<p>{source_text[:250]}...</p>"
 
     prompt = (
         f"Jesteś redaktorem polskiego portalu piłkarskiego PITCH ZONE.\n"
-        f"Na podstawie poniższych informacji ze źródła ({source_name}) przygotuj krótkie, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
+        f"Na podstawie poniższych informacji ze źródła ({source_name}) przygotuj konkretne, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
         f"Wymagania:\n"
-        f"1. Podaj konkretne fakty: kto, co się stało, kiedy, jaki klub/liga, szczegóły kontuzji/transferu/wyniku.\n"
-        f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników ```json) z trzema polami:\n"
+        f"1. Podaj konkretne szczegóły z tekstu: kto, co się stało, kiedy, jaki klub/liga, szczegóły kontuzji, wypowiedzi, transferu lub wyniku.\n"
+        f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown) z trzema polami:\n"
         f'- "title": krótki, dynamiczny nagłówek po polsku (max 85 znaków)\n'
-        f'- "summary": zajawka 1-2 zdania po polsku (max 180 znaków)\n'
-        f'- "paragraphs": lista 2 lub 3 krótkich akapitów po polsku opisujących kluczowe fakty\n\n'
+        f'- "summary": zajawka 1-2 zdania po polsku z najważniejszym faktem (max 190 znaków)\n'
+        f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących wszystkie ważne fakty z materiału\n\n'
         f"Oryginalny tytuł: {orig_title}\n"
-        f"Materiał źródłowy:\n{source_text[:3000]}"
+        f"Materiał źródłowy:\n{source_text[:3500]}"
     )
-
-    host = "generativelanguage.googleapis.com"
-    path = f"/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-    api_url = "https://" + host + path
 
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.4}
     }).encode('utf-8')
 
-    try:
-        req = urllib.request.Request(api_url, data=payload, headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=25) as res:
-            data = json.loads(res.read().decode('utf-8'))
-            raw_reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            raw_reply = re.sub(r'^```json\s*|\s*```$', '', raw_reply, flags=re.IGNORECASE).strip()
-            parsed = json.loads(raw_reply)
+    # Próbujemy po kolei aktualne modele Gemini
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+    
+    for model_name in models_to_try:
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        api_url = re.sub(r'[\[\]]', '', api_url)
+        try:
+            req = urllib.request.Request(api_url, data=payload, headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=25) as res:
+                data = json.loads(res.read().decode('utf-8'))
+                raw_reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                raw_reply = re.sub(r'^```json\s*|\s*```$', '', raw_reply, flags=re.IGNORECASE).strip()
+                parsed = json.loads(raw_reply)
 
-            pl_title = parsed.get("title", orig_title)
-            pl_summary = parsed.get("summary", "")
-            paragraphs = parsed.get("paragraphs", [])
-            html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
-            print(f"Gemini AI wygenerowało: {pl_title}")
-            return pl_title, pl_summary, html_body
-    except Exception as e:
-        print(f"Błąd Gemini AI (używam fallbacku): {e}")
-        return orig_title, source_text[:180], f"<p>{source_text[:220]}...</p>"
+                pl_title = parsed.get("title", orig_title)
+                pl_summary = parsed.get("summary", "")
+                paragraphs = parsed.get("paragraphs", [])
+                html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
+                print(f"Gemini AI ({model_name}) wygenerowało: {pl_title}")
+                return pl_title, pl_summary, html_body
+        except urllib.error.HTTPError as he:
+            if he.code == 404:
+                continue
+            print(f"Błąd HTTP Gemini ({model_name}): {he.code} {he.reason}")
+            break
+        except Exception as e:
+            print(f"Błąd Gemini AI ({model_name}): {e}")
+            break
+
+    return orig_title, source_text[:180], f"<p>{source_text[:220]}...</p>"
 
 def send_to_discord(title, summary, link, source):
     message = {
         "content": f"🚨 **NOWY NEWS PIŁKARSKI ({source})**\n\n**{title}**\n{summary}\n\n🔗 Pełny artykuł źródłowy: {link}"
     }
+    clean_webhook = re.sub(r'[\[\]]', '', WEBHOOK_URL)
     req = urllib.request.Request(
-        WEBHOOK_URL,
+        clean_webhook,
         data=json.dumps(message).encode('utf-8'),
         headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
     )
@@ -140,7 +151,9 @@ def push_news_to_website(new_articles):
         print("Pominięto aktualizację strony (brak GH_TOKEN lub brak nowych artykułów).")
         return
 
-    api_url = "https://" + f"[api.github.com/repos/](https://api.github.com/repos/){GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+    api_url = re.sub(r'[\[\]]', '', api_url)
+    
     headers = {
         "Authorization": f"token {GH_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
@@ -170,7 +183,7 @@ def push_news_to_website(new_articles):
         put_req = urllib.request.Request(api_url, data=payload, headers=headers, method="PUT")
         with urllib.request.urlopen(put_req) as put_res:
             if put_res.status in (200, 201):
-                print(f"Zaktualizowano news.json na stronie (+{len(new_articles)} newsów)!")
+                print(f"SUKCES! Zaktualizowano news.json na stronie (+{len(new_articles)} newsów)!")
     except Exception as e:
         print(f"Błąd aktualizacji news.json na GitHubie: {e}")
 
@@ -179,7 +192,8 @@ def check_news():
     new_sent_count = 0
     website_batch = []
 
-    for url in RSS_FEEDS:
+    for raw_url in RSS_FEEDS:
+        url = re.sub(r'[\[\]]', '', raw_url)
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as response:
@@ -199,7 +213,7 @@ def check_news():
                     link = link_elem.text.strip()
                     rss_summary = clean_html(desc_elem.text) if desc_elem is not None else ""
                     
-                    img_url = "[https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1000&q=80](https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1000&q=80)"
+                    img_url = "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1000&q=80"
                     for child in item:
                         if 'thumbnail' in child.tag or 'content' in child.tag or 'enclosure' in child.tag:
                             if child.attrib.get('url'):
