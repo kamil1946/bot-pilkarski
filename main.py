@@ -20,11 +20,16 @@ GITHUB_FILE_PATH = "news.json"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
+# Rozszerzona lista źródeł RSS (wielokrotnie więcej newsów ze świata futbolu)
 RSS_FEEDS = [
     PROTO + "feeds.bbci.co.uk/sport/football/rss.xml",
     PROTO + "www.skysports.com/rss/11095",
     PROTO + "www.skysports.com/rss/12040",  # Serie A
     PROTO + "www.skysports.com/rss/11881",  # Bundesliga
+    PROTO + "www.skysports.com/rss/11711",  # La Liga
+    PROTO + "www.skysports.com/rss/12028",  # European Football
+    PROTO + "www.skysports.com/rss/11952",  # Transfer Centre
+    PROTO + "https://site.api.espn.com/apis/site/v2/sports/soccer/news", # Uwaga: RSS obsługujemy przez standardowe tagi item, w razie potrzeby system pominie niespójne
 ]
 
 FALLBACK_IMAGES = [
@@ -347,7 +352,13 @@ def check_news():
                 xml_data = response.read()
 
             root = ET.fromstring(xml_data)
-            source = "BBC Sport" if "bbci" in url else "Sky Sports"
+            
+            if "bbci" in url:
+                source = "BBC Sport"
+            elif "espn" in url:
+                source = "ESPN"
+            else:
+                source = "Sky Sports"
 
             items = root.findall('.//item')[:3]
             for item in reversed(items):
