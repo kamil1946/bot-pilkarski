@@ -12,7 +12,7 @@ from datetime import datetime
 
 PROTO = "https" + "://"
 # Zalecane: ustaw DISCORD_WEBHOOK w GitHub Secrets lub wklej tutaj swój zregenerowany URL
-WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip() or (PROTO + "discord.com/api/webhooks/1567194433563398264/v9SIVA2FryrdOCx5RlxxbLsCpqbW3MJWI9TdRpePDd4yvg0f0t525Dp03GULH5YnFgzY")
+WEBHOOK_URL = os.environ.get("https://discord.com/api/webhooks/1572241536471793724/2wVIN2_yZwFK5N1RJX9-wd-CeN0_CWWWeW2whUVd9OZX9jNDGnE_wV6jJiYA_vWy5y2m", "").strip() or (PROTO + "discord.com/api/webhooks/1567194433563398264/v9SIVA2FryrdOCx5RlxxbLsCpqbW3MJWI9TdRpePDd4yvg0f0t525Dp03GULH5YnFgzY")
 HISTORY_FILE = "sent_news.txt"
 
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
