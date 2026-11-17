@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 
 PROTO = "https" + "://"
-# Pamiętaj o wklejeniu tutaj swojego nowego linku do webhooka Discord (lub ustawieniu w GitHub Secrets jako DISCORD_WEBHOOK)
+# Pamiętaj o ustawieniu w GitHub Secrets jako DISCORD_WEBHOOK (lub wklejeniu linku poniżej)
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip() or (PROTO + "discord.com/api/webhooks/TUTAJ_WKLEJ_NOWY_LINK")
 HISTORY_FILE = "sent_news.txt"
 
@@ -20,16 +20,18 @@ GITHUB_FILE_PATH = "news.json"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-# Rozszerzona lista źródeł RSS (wielokrotnie więcej newsów ze świata futbolu)
+# Połączona lista źródeł: polskie (Meczyki), główne brytyjskie oraz agregatory Google News dla La Ligi, Serie A i Bundesligi
 RSS_FEEDS = [
+    PROTO + "www.meczyki.pl/rss.xml",
     PROTO + "feeds.bbci.co.uk/sport/football/rss.xml",
     PROTO + "www.skysports.com/rss/11095",
+    PROTO + "www.skysports.com/rss/11711",  # La Liga
     PROTO + "www.skysports.com/rss/12040",  # Serie A
     PROTO + "www.skysports.com/rss/11881",  # Bundesliga
-    PROTO + "www.skysports.com/rss/11711",  # La Liga
-    PROTO + "www.skysports.com/rss/12028",  # European Football
-    PROTO + "www.skysports.com/rss/11952",  # Transfer Centre
-    PROTO + "https://site.api.espn.com/apis/site/v2/sports/soccer/news", # Uwaga: RSS obsługujemy przez standardowe tagi item, w razie potrzeby system pominie niespójne
+    PROTO + "www.skysports.com/rss/11952",  # Transfery
+    PROTO + "news.google.com/rss/search?q=La+Liga+football&hl=en-US&gl=US&ceid=US:en",
+    PROTO + "news.google.com/rss/search?q=Serie+A+calcio&hl=en-US&gl=US&ceid=US:en",
+    PROTO + "news.google.com/rss/search?q=Bundesliga+fussball&hl=en-US&gl=US&ceid=US:en",
 ]
 
 FALLBACK_IMAGES = [
@@ -52,17 +54,27 @@ def save_sent_news(sent_links):
 
 def detect_category(title, full_text=""):
     t = (title + " " + full_text[:500]).lower()
-    # Bundesliga sprawdzana przed Premier League, żeby np. Harry Kane w Bayernie trafiał do BL
-    if any(k in t for k in ["bundesliga", "bayern", "monachium", "munich", "borussia", "dortmund", "bayer leverkusen", "rb leipzig", "eintracht", "stuttgart", "wolfsburg"]):
-        return "BL", "Bundesliga", "bg-amber-600"
-    if any(k in t for k in ["ekstraklasa", "legia", "lech poznań", "raków", "jagiellonia", "pogoń szczecin", "górnik zabrze", "śląsk wrocław", "cracovia", "widzew", "motor lublin", "piast gliwice"]):
+    
+    # 1. Ekstraklasa
+    if any(k in t for k in ["ekstraklasa", "legia", "lech poznań", "raków", "jagiellonia", "pogoń", "górnik", "śląsk", "cracovia", "widzew", "motor", "piast", "korona", "radomiak", "stal mielec", "puszcza", "motor lublin"]):
         return "EKS", "Ekstraklasa", "bg-rose-600"
-    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "atletico", "mbappe", "vinicius", "yamal", "sevilla", "espanyol", "athletic bilbao", "real sociedad", "villarreal"]):
+        
+    # 2. Bundesliga
+    if any(k in t for k in ["bundesliga", "bayern", "monachium", "munich", "borussia", "dortmund", "leverkusen", "bayer", "leipzig", "lipsk", "eintracht", "stuttgart", "wolfsburg", "werder", "brema", "union berlin"]):
+        return "BL", "Bundesliga", "bg-amber-600"
+        
+    # 3. La Liga
+    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "barca", "atletico", "atletico madryt", "mbappe", "vinicius", "yamal", "sevilla", "espanyol", "bilbao", "athletic", "sociedad", "villarreal", "valencia", "betis", "celta", "girona", "osasuna"]):
         return "LL", "La Liga", "bg-red-600"
-    if any(k in t for k in ["serie a", "juventus", "inter mediolan", "inter milan", "ac milan", "napoli", "as roma", "lazio", "atalanta", "fiorentina", "bologna"]):
+        
+    # 4. Serie A
+    if any(k in t for k in ["serie a", "juventus", "inter", "milan", "ac milan", "inter mediolan", "napoli", "roma", "as roma", "lazio", "atalanta", "fiorentina", "bologna", "torino", "monza", "udinese", "genoa", "cagliari", "verona"]):
         return "SA", "Serie A", "bg-sky-600"
-    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves"]):
+        
+    # 5. Premier League
+    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves", "brentford", "nottingham", "ipswich", "leicester", "southampton"]):
         return "PL", "Premier League", "bg-purple-600"
+        
     return "OTHER", "Inne Ligi", "bg-emerald-600"
 
 def clean_html(raw_html):
@@ -75,7 +87,6 @@ def is_valid_photo_url(url):
     if not url:
         return False
     lower = url.lower()
-    # Akceptujemy wyłącznie formaty JPG i PNG (odrzucamy SVG, TIF, PDF, które psują obrazki)
     return any(ext in lower for ext in [".jpg", ".jpeg", ".png"])
 
 def fetch_wikipedia_main_image(query_term):
@@ -101,7 +112,6 @@ def fetch_wikipedia_main_image(query_term):
         with urllib.request.urlopen(req, timeout=8) as res:
             data = json.loads(res.read().decode("utf-8"))
             pages = data.get("query", {}).get("pages", {})
-            # Sortujemy po indeksie trafności wyszukiwania
             sorted_pages = sorted(pages.values(), key=lambda x: x.get("index", 99))
             for page in sorted_pages:
                 thumb = page.get("thumbnail", {}).get("source")
@@ -156,7 +166,6 @@ def fetch_wikimedia_commons_image(query_term):
 
 def get_legal_article_image(player_name, club_or_topic, index=0):
     """3-stopniowe dobieranie tematycznego legalnego zdjęcia: Piłkarz (Wiki) -> Piłkarz (Commons) -> Klub/Stadion -> Fallback CC0."""
-    # 1. Szukaj konkretnego piłkarza/trenera w Wikipedii
     if player_name:
         img, credit = fetch_wikipedia_main_image(player_name)
         if img:
@@ -168,7 +177,6 @@ def get_legal_article_image(player_name, club_or_topic, index=0):
             print(f"Znaleziono zdjęcie piłkarza (Commons): {player_name}")
             return img, credit
 
-    # 2. Jeśli brak piłkarza, szukaj powiązanego klubu / stadionu / obiektu
     if club_or_topic:
         img, credit = fetch_wikipedia_main_image(club_or_topic)
         if img:
@@ -180,7 +188,6 @@ def get_legal_article_image(player_name, club_or_topic, index=0):
             print(f"Znaleziono zdjęcie tematyczne (Commons): {club_or_topic}")
             return img, credit
 
-    # 3. Ostateczny bezpieczny fallback (Unsplash CC0)
     fallback_url = FALLBACK_IMAGES[index % len(FALLBACK_IMAGES)]
     return fallback_url, "Unsplash (CC0)"
 
@@ -348,15 +355,17 @@ def check_news():
     for url in RSS_FEEDS:
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=12) as response:
                 xml_data = response.read()
 
             root = ET.fromstring(xml_data)
             
-            if "bbci" in url:
+            if "meczyki" in url:
+                source = "Meczyki.pl"
+            elif "bbci" in url:
                 source = "BBC Sport"
-            elif "espn" in url:
-                source = "ESPN"
+            elif "news.google" in url:
+                source = "Prasa Zagraniczna"
             else:
                 source = "Sky Sports"
 
