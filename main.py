@@ -11,8 +11,8 @@ import time
 from datetime import datetime
 
 PROTO = "https" + "://"
-# Zalecane: ustaw DISCORD_WEBHOOK w GitHub Secrets lub wklej tutaj swój zregenerowany URL
-WEBHOOK_URL = os.environ.get("https://discord.com/api/webhooks/1572241536471793724/2wVIN2_yZwFK5N1RJX9-wd-CeN0_CWWWeW2whUVd9OZX9jNDGnE_wV6jJiYA_vWy5y2m", "").strip() or (PROTO + "discord.com/api/webhooks/1567194433563398264/v9SIVA2FryrdOCx5RlxxbLsCpqbW3MJWI9TdRpePDd4yvg0f0t525Dp03GULH5YnFgzY")
+# Pamiętaj o wklejeniu tutaj swojego nowego linku do webhooka Discord (lub ustawieniu w GitHub Secrets jako DISCORD_WEBHOOK)
+WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip() or (PROTO + "discord.com/api/webhooks/TUTAJ_WKLEJ_NOWY_LINK")
 HISTORY_FILE = "sent_news.txt"
 
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
@@ -32,7 +32,6 @@ FALLBACK_IMAGES = [
     PROTO + "images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=1200&q=80",
     PROTO + "images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1200&q=80",
     PROTO + "images.unsplash.com/photo-1431324155629-1a6deb1dec8d?auto=format&fit=crop&w=1200&q=80",
-    PROTO + "images.unsplash.com/photo-1518091043644-c1d4457512c6?auto=format&fit=crop&w=1200&q=80",
 ]
 
 def load_sent_news():
@@ -48,16 +47,17 @@ def save_sent_news(sent_links):
 
 def detect_category(title, full_text=""):
     t = (title + " " + full_text[:500]).lower()
+    # Bundesliga sprawdzana przed Premier League, żeby np. Harry Kane w Bayernie trafiał do BL
+    if any(k in t for k in ["bundesliga", "bayern", "monachium", "munich", "borussia", "dortmund", "bayer leverkusen", "rb leipzig", "eintracht", "stuttgart", "wolfsburg"]):
+        return "BL", "Bundesliga", "bg-amber-600"
     if any(k in t for k in ["ekstraklasa", "legia", "lech poznań", "raków", "jagiellonia", "pogoń szczecin", "górnik zabrze", "śląsk wrocław", "cracovia", "widzew", "motor lublin", "piast gliwice"]):
         return "EKS", "Ekstraklasa", "bg-rose-600"
-    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves"]):
-        return "PL", "Premier League", "bg-purple-600"
     if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "atletico", "mbappe", "vinicius", "yamal", "sevilla", "espanyol", "athletic bilbao", "real sociedad", "villarreal"]):
         return "LL", "La Liga", "bg-red-600"
     if any(k in t for k in ["serie a", "juventus", "inter mediolan", "inter milan", "ac milan", "napoli", "as roma", "lazio", "atalanta", "fiorentina", "bologna"]):
         return "SA", "Serie A", "bg-sky-600"
-    if any(k in t for k in ["bundesliga", "bayern", "borussia", "dortmund", "bayer leverkusen", "rb leipzig", "eintracht", "stuttgart", "wolfsburg"]):
-        return "BL", "Bundesliga", "bg-amber-600"
+    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves"]):
+        return "PL", "Premier League", "bg-purple-600"
     return "OTHER", "Inne Ligi", "bg-emerald-600"
 
 def clean_html(raw_html):
@@ -66,47 +66,117 @@ def clean_html(raw_html):
     text = re.sub(r'<[^<]+?>', '', raw_html)
     return html.unescape(text).strip()
 
-def get_legal_player_image(player_name, index=0):
-    fallback_url = FALLBACK_IMAGES[index % len(FALLBACK_IMAGES)]
-    if not player_name or len(player_name.strip()) < 3:
-        return fallback_url, "Unsplash (CC0)"
+def is_valid_photo_url(url):
+    if not url:
+        return False
+    lower = url.lower()
+    # Akceptujemy wyłącznie formaty JPG i PNG (odrzucamy SVG, TIF, PDF, które psują obrazki)
+    return any(ext in lower for ext in [".jpg", ".jpeg", ".png"])
 
-    query_params = urllib.parse.urlencode({
+def fetch_wikipedia_main_image(query_term):
+    """Pobiera główne zdjęcie z artykułu w Wikipedii (najlepsze źródło portretów piłkarzy)."""
+    if not query_term or len(query_term.strip()) < 3:
+        return None, None
+
+    params = urllib.parse.urlencode({
         "action": "query",
         "format": "json",
         "generator": "search",
-        "gsrsearch": f"filetype:bitmap {player_name.strip()} football",
+        "gsrsearch": query_term.strip(),
+        "gsrlimit": "2",
+        "prop": "pageimages|imageinfo",
+        "pithumbsize": "1000",
+        "pilicense": "free"
+    })
+    url = f"{PROTO}en.wikipedia.org/w/api.php?{params}"
+    headers = {"User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app)"}
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            pages = data.get("query", {}).get("pages", {})
+            # Sortujemy po indeksie trafności wyszukiwania
+            sorted_pages = sorted(pages.values(), key=lambda x: x.get("index", 99))
+            for page in sorted_pages:
+                thumb = page.get("thumbnail", {}).get("source")
+                page_image_name = page.get("pageimage", "")
+                if thumb and is_valid_photo_url(thumb) and "flag" not in page_image_name.lower() and "logo" not in page_image_name.lower():
+                    return thumb, "Wikimedia Commons (CC)"
+    except Exception:
+        pass
+    return None, None
+
+def fetch_wikimedia_commons_image(query_term):
+    """Przeszukuje bezpośrednio bazę multimediów Wikimedia Commons."""
+    if not query_term or len(query_term.strip()) < 3:
+        return None, None
+
+    params = urllib.parse.urlencode({
+        "action": "query",
+        "format": "json",
+        "generator": "search",
+        "gsrsearch": query_term.strip(),
         "gsrnamespace": "6",
-        "gsrlimit": "5",
+        "gsrlimit": "6",
         "prop": "imageinfo",
         "iiprop": "url|extmetadata",
         "iiurlwidth": "1000"
     })
-    api_url = f"{PROTO}commons.wikimedia.org/w/api.php?{query_params}"
+    url = f"{PROTO}commons.wikimedia.org/w/api.php?{params}"
+    headers = {"User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app)"}
 
     try:
-        req = urllib.request.Request(api_url, headers={
-            "User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app)"
-        })
-        with urllib.request.urlopen(req, timeout=10) as res:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as res:
             data = json.loads(res.read().decode("utf-8"))
             pages = data.get("query", {}).get("pages", {})
+            sorted_pages = sorted(pages.values(), key=lambda x: x.get("index", 99))
 
-            for page in pages.values():
+            for page in sorted_pages:
                 info = page.get("imageinfo", [{}])[0]
                 thumb_url = info.get("thumburl") or info.get("url")
-                if not thumb_url or thumb_url.lower().endswith(".svg"):
+                if not is_valid_photo_url(thumb_url):
                     continue
 
                 meta = info.get("extmetadata", {})
                 license_name = meta.get("LicenseShortName", {}).get("value", "CC BY-SA")
                 artist_raw = meta.get("Artist", {}).get("value", "Wikimedia Commons")
-                artist_clean = clean_html(artist_raw)[:45].strip() or "Wikimedia Commons"
+                artist_clean = clean_html(artist_raw)[:40].strip() or "Wikimedia Commons"
 
                 return thumb_url, f"Fot. {artist_clean} ({license_name})"
-    except Exception as e:
-        print(f"Wikimedia fallback dla '{player_name}': {e}")
+    except Exception:
+        pass
+    return None, None
 
+def get_legal_article_image(player_name, club_or_topic, index=0):
+    """3-stopniowe dobieranie tematycznego legalnego zdjęcia: Piłkarz (Wiki) -> Piłkarz (Commons) -> Klub/Stadion -> Fallback CC0."""
+    # 1. Szukaj konkretnego piłkarza/trenera w Wikipedii
+    if player_name:
+        img, credit = fetch_wikipedia_main_image(player_name)
+        if img:
+            print(f"Znaleziono zdjęcie piłkarza (Wikipedia): {player_name}")
+            return img, credit
+
+        img, credit = fetch_wikimedia_commons_image(player_name)
+        if img:
+            print(f"Znaleziono zdjęcie piłkarza (Commons): {player_name}")
+            return img, credit
+
+    # 2. Jeśli brak piłkarza, szukaj powiązanego klubu / stadionu / obiektu
+    if club_or_topic:
+        img, credit = fetch_wikipedia_main_image(club_or_topic)
+        if img:
+            print(f"Znaleziono zdjęcie tematyczne (Wikipedia): {club_or_topic}")
+            return img, credit
+
+        img, credit = fetch_wikimedia_commons_image(club_or_topic)
+        if img:
+            print(f"Znaleziono zdjęcie tematyczne (Commons): {club_or_topic}")
+            return img, credit
+
+    # 3. Ostateczny bezpieczny fallback (Unsplash CC0)
+    fallback_url = FALLBACK_IMAGES[index % len(FALLBACK_IMAGES)]
     return fallback_url, "Unsplash (CC0)"
 
 def fetch_source_facts(url, fallback_summary):
@@ -159,19 +229,19 @@ def get_available_flash_models():
 
 def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models_list):
     if not GEMINI_API_KEY:
-        print("BŁĄD: Brak klucza GEMINI_API_KEY!")
-        return orig_title, source_text[:180], f"<p>{source_text[:300]}</p>", ""
+        return orig_title, source_text[:180], f"<p>{source_text[:300]}</p>", "", ""
 
     prompt = (
         f"Jesteś redaktorem polskiego portalu piłkarskiego PITCH ZONE.\n"
         f"Na podstawie poniższego artykułu ze źródła ({source_name}) napisz konkretne, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
         f"Wymagania:\n"
         f"1. Wyciągnij najważniejsze detale z tekstu: nazwiska piłkarzy i trenerów, nazwy klubów, dokładny powód (np. jaka kontuzja, na ile wypada, jaki wynik, co dokładnie powiedział trener).\n"
-        f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown) z czterema polami:\n"
+        f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown) z pięcioma polami:\n"
         f'- "title": dynamiczny nagłówek po polsku (max 85 znaków)\n'
         f'- "summary": zajawka 1-2 zdania po polsku z głównym faktem (max 190 znaków)\n'
         f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących szczegóły wydarzenia\n'
-        f'- "player": pełne imię i nazwisko głównego piłkarza lub trenera występującego w artykule (po angielsku/międzynarodowo, np. "Erling Haaland", "Mikel Arteta", lub pusty ciąg "" jeśli artykuł dotyczy wyłącznie klubu/ligi bez konkretnej osoby)\n\n'
+        f'- "player": pełne imię i nazwisko głównego piłkarza lub trenera w artykule po angielsku (np. "Harry Kane", "Mikel Arteta" lub "" jeśli brak osoby)\n'
+        f'- "topic": angielska nazwa głównego klubu, stadionu lub wydarzenia do wyszukania zdjęcia w Wikipedii (np. "Allianz Arena", "Arsenal F.C.", "Wembley Stadium")\n\n'
         f"Oryginalny tytuł: {orig_title}\n"
         f"Treść artykułu źródłowego:\n{source_text[:3500]}"
     )
@@ -196,9 +266,10 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models
                     pl_summary = parsed.get("summary", "")
                     paragraphs = parsed.get("paragraphs", [])
                     player_name = parsed.get("player", "")
+                    topic_name = parsed.get("topic", "")
                     html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
-                    print(f"SUKCES Gemini ({model_name}): {pl_title} | Postać: {player_name}")
-                    return pl_title, pl_summary, html_body, player_name
+                    print(f"SUKCES Gemini ({model_name}): {pl_title} | Postać: {player_name} | Temat: {topic_name}")
+                    return pl_title, pl_summary, html_body, player_name, topic_name
             except urllib.error.HTTPError as he:
                 if he.code in (429, 503) and attempt == 0:
                     time.sleep(8)
@@ -209,10 +280,10 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models
             except Exception:
                 break
 
-    return orig_title, source_text[:180], f"<p>{source_text[:350]}</p>", ""
+    return orig_title, source_text[:180], f"<p>{source_text[:350]}</p>", "", ""
 
 def send_to_discord(title, summary, link, source):
-    if not WEBHOOK_URL:
+    if not WEBHOOK_URL or "TUTAJ_WKLEJ" in WEBHOOK_URL:
         return
     message = {
         "content": f"🚨 **NOWY NEWS PIŁKARSKI ({source})**\n\n**{title}**\n{summary}\n\n🔗 Pełny artykuł źródłowy: {link}"
@@ -253,7 +324,7 @@ def push_news_to_website(new_articles):
         ).decode('utf-8')
 
         payload = json.dumps({
-            "message": f"Auto-news PL: dodano {len(new_articles)} streszczeń z legalnymi zdjęciami",
+            "message": f"Auto-news PL: dodano {len(new_articles)} streszczeń ze zdjęciami tematycznymi",
             "content": encoded_content,
             "sha": sha
         }).encode('utf-8')
@@ -294,12 +365,11 @@ def check_news():
                             time.sleep(5)
 
                         source_context = fetch_source_facts(link, rss_summary)
-                        pl_title, pl_summary, pl_html_body, player_name = summarize_in_polish_with_gemini(
+                        pl_title, pl_summary, pl_html_body, player_name, topic_name = summarize_in_polish_with_gemini(
                             orig_title, source_context, source, models_list
                         )
 
-                        # Pobierz legalne zdjęcie z Wikimedia Commons (lub bezpieczny fallback CC0)
-                        legal_img_url, legal_img_credit = get_legal_player_image(player_name, new_sent_count)
+                        legal_img_url, legal_img_credit = get_legal_article_image(player_name, topic_name, new_sent_count)
 
                         send_to_discord(pl_title, pl_summary, link, source)
                         sent_links.add(link)
