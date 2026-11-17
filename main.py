@@ -1,4 +1,5 @@
 import urllib.request
+import urllib.parse
 import urllib.error
 import xml.etree.ElementTree as ET
 import json
@@ -10,7 +11,8 @@ import time
 from datetime import datetime
 
 PROTO = "https" + "://"
-WEBHOOK_URL = PROTO + "discord.com/api/webhooks/1567194433563398264/v9SIVA2FryrdOCx5RlxxbLsCpqbW3MJWI9TdRpePDd4yvg0f0t525Dp03GULH5YnFgzY"
+# Zalecane: ustaw DISCORD_WEBHOOK w GitHub Secrets lub wklej tutaj swój zregenerowany URL
+WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip() or (PROTO + "discord.com/api/webhooks/1567194433563398264/v9SIVA2FryrdOCx5RlxxbLsCpqbW3MJWI9TdRpePDd4yvg0f0t525Dp03GULH5YnFgzY")
 HISTORY_FILE = "sent_news.txt"
 
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
@@ -18,12 +20,19 @@ GITHUB_FILE_PATH = "news.json"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-# Rozszerzona lista źródeł RSS (główne serwisy + dedykowane ligi)
 RSS_FEEDS = [
     PROTO + "feeds.bbci.co.uk/sport/football/rss.xml",
     PROTO + "www.skysports.com/rss/11095",
     PROTO + "www.skysports.com/rss/12040",  # Serie A
     PROTO + "www.skysports.com/rss/11881",  # Bundesliga
+]
+
+FALLBACK_IMAGES = [
+    PROTO + "images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=1200&q=80",
+    PROTO + "images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=1200&q=80",
+    PROTO + "images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1200&q=80",
+    PROTO + "images.unsplash.com/photo-1431324155629-1a6deb1dec8d?auto=format&fit=crop&w=1200&q=80",
+    PROTO + "images.unsplash.com/photo-1518091043644-c1d4457512c6?auto=format&fit=crop&w=1200&q=80",
 ]
 
 def load_sent_news():
@@ -56,6 +65,49 @@ def clean_html(raw_html):
         return ""
     text = re.sub(r'<[^<]+?>', '', raw_html)
     return html.unescape(text).strip()
+
+def get_legal_player_image(player_name, index=0):
+    fallback_url = FALLBACK_IMAGES[index % len(FALLBACK_IMAGES)]
+    if not player_name or len(player_name.strip()) < 3:
+        return fallback_url, "Unsplash (CC0)"
+
+    query_params = urllib.parse.urlencode({
+        "action": "query",
+        "format": "json",
+        "generator": "search",
+        "gsrsearch": f"filetype:bitmap {player_name.strip()} football",
+        "gsrnamespace": "6",
+        "gsrlimit": "5",
+        "prop": "imageinfo",
+        "iiprop": "url|extmetadata",
+        "iiurlwidth": "1000"
+    })
+    api_url = f"{PROTO}commons.wikimedia.org/w/api.php?{query_params}"
+
+    try:
+        req = urllib.request.Request(api_url, headers={
+            "User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app)"
+        })
+        with urllib.request.urlopen(req, timeout=10) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            pages = data.get("query", {}).get("pages", {})
+
+            for page in pages.values():
+                info = page.get("imageinfo", [{}])[0]
+                thumb_url = info.get("thumburl") or info.get("url")
+                if not thumb_url or thumb_url.lower().endswith(".svg"):
+                    continue
+
+                meta = info.get("extmetadata", {})
+                license_name = meta.get("LicenseShortName", {}).get("value", "CC BY-SA")
+                artist_raw = meta.get("Artist", {}).get("value", "Wikimedia Commons")
+                artist_clean = clean_html(artist_raw)[:45].strip() or "Wikimedia Commons"
+
+                return thumb_url, f"Fot. {artist_clean} ({license_name})"
+    except Exception as e:
+        print(f"Wikimedia fallback dla '{player_name}': {e}")
+
+    return fallback_url, "Unsplash (CC0)"
 
 def fetch_source_facts(url, fallback_summary):
     try:
@@ -108,17 +160,18 @@ def get_available_flash_models():
 def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models_list):
     if not GEMINI_API_KEY:
         print("BŁĄD: Brak klucza GEMINI_API_KEY!")
-        return orig_title, source_text[:180], f"<p>{source_text[:300]}</p>"
+        return orig_title, source_text[:180], f"<p>{source_text[:300]}</p>", ""
 
     prompt = (
         f"Jesteś redaktorem polskiego portalu piłkarskiego PITCH ZONE.\n"
         f"Na podstawie poniższego artykułu ze źródła ({source_name}) napisz konkretne, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
         f"Wymagania:\n"
         f"1. Wyciągnij najważniejsze detale z tekstu: nazwiska piłkarzy i trenerów, nazwy klubów, dokładny powód (np. jaka kontuzja, na ile wypada, jaki wynik, co dokładnie powiedział trener).\n"
-        f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown) z trzema polami:\n"
+        f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown) z czterema polami:\n"
         f'- "title": dynamiczny nagłówek po polsku (max 85 znaków)\n'
         f'- "summary": zajawka 1-2 zdania po polsku z głównym faktem (max 190 znaków)\n'
-        f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących szczegóły wydarzenia\n\n'
+        f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących szczegóły wydarzenia\n'
+        f'- "player": pełne imię i nazwisko głównego piłkarza lub trenera występującego w artykule (po angielsku/międzynarodowo, np. "Erling Haaland", "Mikel Arteta", lub pusty ciąg "" jeśli artykuł dotyczy wyłącznie klubu/ligi bez konkretnej osoby)\n\n'
         f"Oryginalny tytuł: {orig_title}\n"
         f"Treść artykułu źródłowego:\n{source_text[:3500]}"
     )
@@ -142,9 +195,10 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models
                     pl_title = parsed.get("title", orig_title)
                     pl_summary = parsed.get("summary", "")
                     paragraphs = parsed.get("paragraphs", [])
+                    player_name = parsed.get("player", "")
                     html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
-                    print(f"SUKCES Gemini ({model_name}): {pl_title}")
-                    return pl_title, pl_summary, html_body
+                    print(f"SUKCES Gemini ({model_name}): {pl_title} | Postać: {player_name}")
+                    return pl_title, pl_summary, html_body, player_name
             except urllib.error.HTTPError as he:
                 if he.code in (429, 503) and attempt == 0:
                     time.sleep(8)
@@ -155,9 +209,11 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models
             except Exception:
                 break
 
-    return orig_title, source_text[:180], f"<p>{source_text[:350]}</p>"
+    return orig_title, source_text[:180], f"<p>{source_text[:350]}</p>", ""
 
 def send_to_discord(title, summary, link, source):
+    if not WEBHOOK_URL:
+        return
     message = {
         "content": f"🚨 **NOWY NEWS PIŁKARSKI ({source})**\n\n**{title}**\n{summary}\n\n🔗 Pełny artykuł źródłowy: {link}"
     }
@@ -197,7 +253,7 @@ def push_news_to_website(new_articles):
         ).decode('utf-8')
 
         payload = json.dumps({
-            "message": f"Auto-news PL: dodano {len(new_articles)} streszczeń",
+            "message": f"Auto-news PL: dodano {len(new_articles)} streszczeń z legalnymi zdjęciami",
             "content": encoded_content,
             "sha": sha
         }).encode('utf-8')
@@ -233,21 +289,17 @@ def check_news():
                     link = link_elem.text.strip()
                     rss_summary = clean_html(desc_elem.text) if desc_elem is not None else ""
 
-                    img_url = PROTO + "images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=1000&q=80"
-                    for child in item:
-                        if 'thumbnail' in child.tag or 'content' in child.tag or 'enclosure' in child.tag:
-                            if child.attrib.get('url'):
-                                img_url = child.attrib.get('url')
-                                break
-
                     if link not in sent_links:
                         if new_sent_count > 0:
                             time.sleep(5)
 
                         source_context = fetch_source_facts(link, rss_summary)
-                        pl_title, pl_summary, pl_html_body = summarize_in_polish_with_gemini(
+                        pl_title, pl_summary, pl_html_body, player_name = summarize_in_polish_with_gemini(
                             orig_title, source_context, source, models_list
                         )
+
+                        # Pobierz legalne zdjęcie z Wikimedia Commons (lub bezpieczny fallback CC0)
+                        legal_img_url, legal_img_credit = get_legal_player_image(player_name, new_sent_count)
 
                         send_to_discord(pl_title, pl_summary, link, source)
                         sent_links.add(link)
@@ -262,14 +314,15 @@ def check_news():
                             "badgeColor": badge_color,
                             "time": now_str,
                             "source": f"Na podstawie: {source}",
-                            "img": img_url,
+                            "img": legal_img_url,
+                            "imgCredit": legal_img_credit,
                             "title": pl_title,
                             "summary": pl_summary,
                             "content": f"{pl_html_body}<p class='pt-3 border-t border-gray-100 dark:border-border text-xs text-gray-400'>Podsumowanie faktów opracowane na podstawie publikacji {source}. <a href='{link}' target='_blank' rel='noopener' class='text-purple-500 font-bold underline ml-1'>Przeczytaj oryginalny artykuł →</a></p>"
                         })
 
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Błąd przetwarzania kanału {url}: {e}")
 
     if new_sent_count > 0:
         save_sent_news(sent_links)
