@@ -52,27 +52,53 @@ def save_sent_news(sent_links):
         for link in sent_links:
             f.write(f"{link}\n")
 
-def detect_category(title, full_text=""):
-    t = (title + " " + full_text[:500]).lower()
+def is_football_article(title, full_text=""):
+    """Odrzuca artykuły o innych sportach (np. tenis, F1, żużel, NBA, siatkówka, MMA)."""
+    t = (title + " " + full_text[:400]).lower()
     
-    # 1. Ekstraklasa
-    if any(k in t for k in ["ekstraklasa", "legia", "lech poznań", "raków", "jagiellonia", "pogoń", "górnik", "śląsk", "cracovia", "widzew", "motor", "piast", "korona", "radomiak", "stal mielec", "puszcza", "motor lublin"]):
-        return "EKS", "Ekstraklasa", "bg-rose-600"
+    non_football_keywords = [
+        "tenis", "tennis", "iga świątek", "hubert hurkacz", "wta", "atp", "roland garros", "wimbledon",
+        "formuła 1", "formula 1", "f1", "verstappen", "hamilton", "leclerc", "grand prix",
+        "żużel", "speedway", "zmarzlik", "pge ekstraliga",
+        "siatkówka", "volleyball", "plusliga", "fornal", "leon", "grbić",
+        "koszykówka", "nba", "lebron", "sochan",
+        "mma", "ufc", "ksw", "fame mma", "boks", "boxing", "usyk", "fury",
+        "skoki narciarskie", "stoch", "kubacki", "żyła", "małysz",
+        "hokej", "nhl", "golf", "kolarstwo", "tour de france"
+    ]
+    if any(bad in t for bad in non_football_keywords):
+        return False
+    return True
+
+def detect_category(title, full_text=""):
+    t = (title + " " + full_text[:600]).lower()
+    
+    # 1. Ekstraklasa / Polska Piłka (precyzyjne frazy, bez ogólników typu "motor")
+    eks_keywords = [
+        "ekstraklasa", "pko bp ekstraklasa", "1. liga", "fortuna 1 liga", "betclic 1 liga", "puchar polski",
+        "reprezentacja polski", "pzpn", "kulesza",
+        "legia warszawa", "legia", "lech poznań", "raków częstochowa", "raków", "jagiellonia białystok", "jagiellonia",
+        "pogoń szczecin", "górnik zabrze", "śląsk wrocław", "cracovia", "widzew łódź", "widzew",
+        "motor lublin", "piast gliwice", "korona kielce", "radomiak radom", "stal mielec",
+        "puszcza niepołomice", "zagłębie lubin", "gks katowice", "lechia gdańsk", "wisła kraków", "ruch chorzów"
+    ]
+    if any(k in t for k in eks_keywords):
+        return "EKS", "Ekstraklasa / PL", "bg-rose-600"
         
     # 2. Bundesliga
     if any(k in t for k in ["bundesliga", "bayern", "monachium", "munich", "borussia", "dortmund", "leverkusen", "bayer", "leipzig", "lipsk", "eintracht", "stuttgart", "wolfsburg", "werder", "brema", "union berlin"]):
         return "BL", "Bundesliga", "bg-amber-600"
         
     # 3. La Liga
-    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "barca", "atletico", "atletico madryt", "mbappe", "vinicius", "yamal", "sevilla", "espanyol", "bilbao", "athletic", "sociedad", "villarreal", "valencia", "betis", "celta", "girona", "osasuna"]):
+    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "barca", "atletico", "atletico madryt", "mbappe", "vinicius", "yamal", "lewandowski", "szczęsny", "sevilla", "espanyol", "bilbao", "athletic", "sociedad", "villarreal", "valencia", "betis", "celta", "girona", "osasuna"]):
         return "LL", "La Liga", "bg-red-600"
         
     # 4. Serie A
-    if any(k in t for k in ["serie a", "juventus", "inter", "milan", "ac milan", "inter mediolan", "napoli", "roma", "as roma", "lazio", "atalanta", "fiorentina", "bologna", "torino", "monza", "udinese", "genoa", "cagliari", "verona"]):
+    if any(k in t for k in ["serie a", "juventus", "inter", "milan", "ac milan", "inter mediolan", "napoli", "roma", "as roma", "lazio", "atalanta", "fiorentina", "bologna", "torino", "monza", "udinese", "genoa", "cagliari", "verona", "zieliński", "zalewski"]):
         return "SA", "Serie A", "bg-sky-600"
         
     # 5. Premier League
-    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves", "brentford", "nottingham", "ipswich", "leicester", "southampton"]):
+    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves", "brentford", "nottingham", "ipswich", "leicester", "southampton", "kiwior", "cash", "bednarek"]):
         return "PL", "Premier League", "bg-purple-600"
         
     return "OTHER", "Inne Ligi", "bg-emerald-600"
@@ -381,6 +407,12 @@ def check_news():
                     rss_summary = clean_html(desc_elem.text) if desc_elem is not None else ""
 
                     if link not in sent_links:
+                        # Odrzucamy inne dyscypliny sportowe niż piłka nożna
+                        if not is_football_article(orig_title, rss_summary):
+                            print(f"Pominięto (inny sport): {orig_title}")
+                            sent_links.add(link)
+                            continue
+
                         if new_sent_count > 0:
                             time.sleep(5)
 
@@ -417,6 +449,9 @@ def check_news():
     if new_sent_count > 0:
         save_sent_news(sent_links)
         push_news_to_website(website_batch)
+    elif len(sent_links) > 0:
+        # Zapisz odrzucone linki z innych sportów, żeby bot nie sprawdzał ich ponownie
+        save_sent_news(sent_links)
 
 if __name__ == "__main__":
     check_news()
