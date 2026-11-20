@@ -15,7 +15,7 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 
 PROTO = "https" + "://"
-WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip() or (PROTO + "discord.com/api/webhooks/TUTAJ_WKLEJ_NOWY_LINK")
+WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip()
 HISTORY_FILE = "sent_news.txt"
 
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
@@ -76,6 +76,17 @@ def save_sent_news(sent_links):
 
 def is_football_article(title, full_text=""):
     t = (title + " " + full_text[:400]).lower()
+
+    # 1. Twarda blokada spamu, linków do Telegrama, kasyn i reklam
+    spam_keywords = [
+        "t.me/", "telegram", "join our channel", "lootmudra", "free earning",
+        "promo code", "airdrop", "crypto", "casino", "kasyno", "giveaway",
+        "whatsapp", "subscribe to", "click here"
+    ]
+    if any(spam in t for spam in spam_keywords):
+        return False
+
+    # 2. Blokada innych dyscyplin sportowych
     non_football_keywords = [
         "tenis", "tennis", "iga świątek", "hubert hurkacz", "wta", "atp", "roland garros", "wimbledon",
         "formuła 1", "formula 1", "f1", "verstappen", "hamilton", "leclerc", "grand prix",
