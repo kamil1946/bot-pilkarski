@@ -21,6 +21,7 @@ HISTORY_FILE = "sent_news.txt"
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
 GITHUB_FILE_PATH = "news.json"
 SITE_URL = "https://strona-bot-pilkarski.vercel.app"
+LOGO_PATH = "logo-bramkarz.png"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
@@ -245,8 +246,32 @@ def load_font_safe(size, bold=True):
             return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
-def generate_social_card(img_url, badge_text, cat_code, title, summary, output_path="social_card.png"):
-    """Tworzy gotową kartę graficzną 1080x1350 (format 4:5 Instagram / X / Facebook)."""
+def load_white_logo(target_height=48):
+    """Wczytuje prawdziwe logo (logo-bramkarz.png), skaluje do mniejszego rozmiaru i zmienia na białe."""
+    logo_img = None
+    try:
+        if os.path.exists(LOGO_PATH):
+            logo_img = Image.open(LOGO_PATH).convert("RGBA")
+        else:
+            req = urllib.request.Request(f"{SITE_URL}/{LOGO_PATH}", headers={"User-Agent": "PitchZoneBot/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as res:
+                logo_img = Image.open(io.BytesIO(res.read())).convert("RGBA")
+    except Exception:
+        return None
+
+    if logo_img:
+        aspect = logo_img.width / max(1, logo_img.height)
+        new_w = max(1, int(target_height * aspect))
+        logo_img = logo_img.resize((new_w, target_height), Image.Resampling.LANCZOS)
+        # Odwrócenie ciemnego konturu na czysty biały (jak dark:invert na stronie)
+        r, g, b, a = logo_img.split()
+        white_layer = Image.new("RGBA", logo_img.size, (255, 255, 255, 255))
+        white_layer.putalpha(a)
+        return white_layer
+    return None
+
+def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code, title, summary, output_path="social_card.png"):
+    """Tworzy w 100% legalną kartę graficzną 1080x1350 z prawdziwym logo, podpisem autora CC i źródłem."""
     W, H = 1080, 1350
     canvas = Image.new("RGBA", (W, H), (8, 8, 12, 255))
 
@@ -275,12 +300,12 @@ def generate_social_card(img_url, badge_text, cat_code, title, summary, output_p
     # 2. Ciemny gradient od góry i od dołu dla pełnej czytelności typografii
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw_ov = ImageDraw.Draw(overlay)
-    for y in range(220):
-        alpha = int(200 * (1 - y / 220))
+    for y in range(210):
+        alpha = int(210 * (1 - y / 210))
         draw_ov.line([(0, y), (W, y)], fill=(5, 5, 8, alpha))
 
     grad_start = 420
-    grad_end = 960
+    grad_end = 950
     for y in range(grad_start, H):
         if y < grad_end:
             ratio = (y - grad_start) / (grad_end - grad_start)
@@ -292,49 +317,52 @@ def generate_social_card(img_url, badge_text, cat_code, title, summary, output_p
     canvas = Image.alpha_composite(canvas, overlay)
     draw = ImageDraw.Draw(canvas)
 
-    # 3. Górny branding: PITCH ZONE + LIVE
-    font_brand = load_font_safe(46, bold=True)
-    font_sub = load_font_safe(18, bold=True)
-    draw.text((64, 52), "PITCH", font=font_brand, fill=(255, 255, 255, 255))
-    pitch_w = draw.textbbox((0, 0), "PITCH", font=font_brand)[2]
-    draw.text((64 + pitch_w + 14, 52), "ZONE", font=font_brand, fill=(168, 85, 247, 255))
-    draw.text((64, 108), "SERWIS PIŁKARSKI • NEWSY NA ŻYWO", font=font_sub, fill=(180, 180, 195, 255))
+    # 3. Górny branding: prawdziwe pomniejszone logo (48px) + PITCH ZONE (bez napisu LIVE)
+    text_start_x = 64
+    logo_img = load_white_logo(target_height=48)
+    if logo_img:
+        canvas.paste(logo_img, (64, 54), logo_img)
+        text_start_x = 64 + logo_img.width + 18
 
-    # Pigułka LIVE w prawym górnym rogu
-    draw.rounded_rectangle([(W - 210, 58), (W - 64, 106)], radius=24, fill=(16, 185, 129, 45), outline=(16, 185, 129, 255), width=2)
-    draw.ellipse([(W - 188, 74), (W - 172, 90)], fill=(16, 185, 129, 255))
-    draw.text((W - 160, 70), "LIVE", font=load_font_safe(22, bold=True), fill=(52, 211, 153, 255))
+    font_brand = load_font_safe(40, bold=True)
+    font_sub = load_font_safe(15, bold=True)
+    draw.text((text_start_x, 50), "PITCH", font=font_brand, fill=(255, 255, 255, 255))
+    pitch_w = draw.textbbox((0, 0), "PITCH", font=font_brand)[2]
+    draw.text((text_start_x + pitch_w + 12, 50), "ZONE", font=font_brand, fill=(168, 85, 247, 255))
+    draw.text((text_start_x, 96), "SERWIS PIŁKARSKI", font=font_sub, fill=(185, 185, 200, 255))
 
     # 4. Kolorowy badge ligi
     badge_rgb = CATEGORY_META.get(cat_code, CATEGORY_META["PL"])[2]
     badge_label = badge_text.upper()
-    font_badge = load_font_safe(24, bold=True)
+    font_badge = load_font_safe(23, bold=True)
     b_box = draw.textbbox((0, 0), badge_label, font=font_badge)
-    b_w = (b_box[2] - b_box[0]) + 44
-    badge_y = 755
-    draw.rounded_rectangle([(64, badge_y), (64 + b_w, badge_y + 48)], radius=24, fill=(*badge_rgb, 255))
-    draw.text((86, badge_y + 10), badge_label, font=font_badge, fill=(255, 255, 255, 255))
+    b_w = (b_box[2] - b_box[0]) + 42
+    badge_y = 750
+    draw.rounded_rectangle([(64, badge_y), (64 + b_w, badge_y + 46)], radius=23, fill=(*badge_rgb, 255))
+    draw.text((85, badge_y + 9), badge_label, font=font_badge, fill=(255, 255, 255, 255))
 
     # 5. Główny nagłówek (łamany na max 4 linie)
-    font_title = load_font_safe(54, bold=True)
+    font_title = load_font_safe(52, bold=True)
     wrapped_title = textwrap.wrap(title, width=28)[:4]
-    curr_y = badge_y + 72
+    curr_y = badge_y + 70
     for line in wrapped_title:
         draw.text((64, curr_y), line, font=font_title, fill=(255, 255, 255, 255))
-        curr_y += 68
+        curr_y += 66
 
     # 6. Zajawka (summary)
-    curr_y += 16
-    font_summary = load_font_safe(28, bold=False)
+    curr_y += 14
+    font_summary = load_font_safe(27, bold=False)
     wrapped_sum = textwrap.wrap(summary, width=52)[:3]
     for line in wrapped_sum:
         draw.text((64, curr_y), line, font=font_summary, fill=(195, 195, 210, 255))
-        curr_y += 38
+        curr_y += 37
 
-    # 7. Dolny pasek z adresem portalu
-    draw.line([(64, H - 105), (W - 64, H - 105)], fill=(45, 45, 60, 255), width=2)
-    draw.rectangle([(64, H - 82), (72, H - 46)], fill=(168, 85, 247, 255))
-    draw.text((88, H - 78), "CZYTAJ CAŁOŚĆ NA PORTALU PITCH ZONE", font=load_font_safe(22, bold=True), fill=(220, 220, 235, 255))
+    # 7. Dolny pasek prawny: źródło informacji + wymóg licencyjny autora zdjęcia CC
+    draw.line([(64, H - 112), (W - 64, H - 112)], fill=(45, 45, 60, 255), width=2)
+    draw.rectangle([(64, H - 88), (71, H - 44)], fill=(168, 85, 247, 255))
+    draw.text((86, H - 88), f"WIĘCEJ NA PITCH ZONE  •  ŹRÓDŁO: {source_name.upper()}", font=load_font_safe(19, bold=True), fill=(225, 225, 240, 255))
+    credit_label = (img_credit or "Unsplash (CC0)")[:65]
+    draw.text((86, H - 60), f"Zdjęcie: {credit_label} | Opracowanie informacyjne (art. 25 pr. aut.)", font=load_font_safe(15, bold=False), fill=(140, 140, 155, 255))
 
     canvas.convert("RGB").save(output_path, "PNG", optimize=True)
     return output_path
@@ -583,7 +611,9 @@ def check_news():
                         # Generowanie karty graficznej 1080x1350 do social mediów
                         card_path = None
                         try:
-                            card_path = generate_social_card(legal_img_url, badge_text, cat_code, pl_title, pl_summary)
+                            card_path = generate_social_card(
+                                legal_img_url, legal_img_credit, source, badge_text, cat_code, pl_title, pl_summary
+                            )
                         except Exception as ge:
                             print(f"Błąd generowania karty graficznej: {ge}")
 
