@@ -17,10 +17,14 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Zainstaluj biblioteki graficzne (Pillow)
+        run: pip install pillow
+
       - name: Uruchom bota
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: python main.py
 
       - name: Zapisz historię wysłanych linków
