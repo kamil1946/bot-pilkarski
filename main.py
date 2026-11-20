@@ -101,6 +101,8 @@ def is_football_article(title, full_text=""):
     return not any(bad in t for bad in non_football_keywords)
 
 def detect_category(title, full_text="", default_cat=None):
+    # Najpierw sprawdzamy sam tytuł (ma najwyższy priorytet)
+    t_title = (title or "").lower()
     t = (title + " " + full_text[:700]).lower()
     
     if any(k in t for k in ["liga mistrzów", "champions league", "ucl"]):
@@ -117,20 +119,45 @@ def detect_category(title, full_text="", default_cat=None):
         "motor lublin", "piast gliwice", "korona kielce", "radomiak radom", "stal mielec",
         "puszcza niepołomice", "zagłębie lubin", "gks katowice", "lechia gdańsk", "wisła kraków"
     ]
-    if any(k in t for k in eks_keywords):
-        return "EKS", CATEGORY_META["EKS"][0], CATEGORY_META["EKS"][1]
-        
-    if any(k in t for k in ["bundesliga", "bayern", "monachium", "munich", "borussia", "dortmund", "leverkusen", "bayer", "leipzig", "lipsk", "eintracht", "stuttgart", "wolfsburg", "werder", "brema", "union berlin", "freiburg", "hoffenheim", "mainz", "augsburg", "st. pauli", "bochum", "heidenheim"]):
-        return "BL", CATEGORY_META["BL"][0], CATEGORY_META["BL"][1]
-        
-    if any(k in t for k in ["la liga", "laliga", "real madrid", "real madryt", "barcelona", "barca", "atletico", "atlético", "mbappe", "mbappé", "vinicius", "yamal", "lewandowski", "szczęsny", "sevilla", "espanyol", "bilbao", "athletic club", "sociedad", "villarreal", "valencia", "betis", "celta", "girona", "osasuna", "mallorca", "getafe", "rayo vallecano"]):
-        return "LL", CATEGORY_META["LL"][0], CATEGORY_META["LL"][1]
-        
-    if any(k in t for k in ["serie a", "juventus", "inter", "milan", "ac milan", "inter mediolan", "napoli", "roma", "as roma", "lazio", "atalanta", "fiorentina", "bologna", "torino", "monza", "udinese", "genoa", "cagliari", "verona", "parma", "como", "empoli", "lecce", "venezia", "zieliński", "zalewski"]):
-        return "SA", CATEGORY_META["SA"][0], CATEGORY_META["SA"][1]
-        
-    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves", "wolverhampton", "brentford", "nottingham", "ipswich", "leicester", "southampton", "kiwior", "cash", "bednarek"]):
-        return "PL", CATEGORY_META["PL"][0], CATEGORY_META["PL"][1]
+    pl_keywords = [
+        "premier league", "arsenal", "arteta", "liverpool", "man utd", "manchester united",
+        "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa",
+        "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth",
+        "wolves", "wolverhampton", "brentford", "nottingham", "ipswich", "leicester",
+        "southampton", "kiwior", "cash", "bednarek"
+    ]
+    ll_keywords = [
+        "la liga", "laliga", "real madrid", "real madryt", "barcelona", "barca",
+        "atletico", "atlético", "mbappe", "mbappé", "vinicius", "yamal", "lewandowski",
+        "szczęsny", "sevilla", "espanyol", "bilbao", "athletic club", "sociedad",
+        "villarreal", "valencia", "betis", "celta", "girona", "osasuna", "mallorca",
+        "getafe", "rayo vallecano"
+    ]
+    sa_keywords = [
+        "serie a", "juventus", "inter mediolan", "ac milan", "napoli", "as roma",
+        "lazio", "atalanta", "fiorentina", "bologna", "torino", "monza", "udinese",
+        "genoa", "cagliari", "verona", "parma", "como", "empoli", "lecce", "venezia",
+        "zieliński", "zalewski"
+    ]
+    bl_keywords = [
+        "bundesliga", "bayern", "monachium", "munich", "borussia", "dortmund",
+        "leverkusen", "bayer", "leipzig", "lipsk", "eintracht", "stuttgart",
+        "wolfsburg", "werder", "brema", "union berlin", "freiburg", "hoffenheim",
+        "mainz", "augsburg", "st. pauli", "bochum", "heidenheim"
+    ]
+
+    # Sprawdzamy najpierw sam tytuł, żeby treść poboczna nie myliła ligi
+    for scope in (t_title, t):
+        if any(k in scope for k in eks_keywords):
+            return "EKS", CATEGORY_META["EKS"][0], CATEGORY_META["EKS"][1]
+        if any(k in scope for k in pl_keywords):
+            return "PL", CATEGORY_META["PL"][0], CATEGORY_META["PL"][1]
+        if any(k in scope for k in ll_keywords):
+            return "LL", CATEGORY_META["LL"][0], CATEGORY_META["LL"][1]
+        if any(k in scope for k in sa_keywords):
+            return "SA", CATEGORY_META["SA"][0], CATEGORY_META["SA"][1]
+        if any(k in scope for k in bl_keywords):
+            return "BL", CATEGORY_META["BL"][0], CATEGORY_META["BL"][1]
 
     if default_cat and default_cat in CATEGORY_META:
         if default_cat == "EKS" and "ekstraklas" not in t and "liga" not in t:
@@ -165,7 +192,7 @@ def fetch_wikipedia_main_image(query_term):
         "pilicense": "free"
     })
     url = f"{PROTO}en.wikipedia.org/w/api.php?{params}"
-    headers = {"User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app)"}
+    headers = {"User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app; contact@pitchzone.pl)"}
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=8) as res:
@@ -196,7 +223,7 @@ def fetch_wikimedia_commons_image(query_term):
         "iiurlwidth": "1000"
     })
     url = f"{PROTO}commons.wikimedia.org/w/api.php?{params}"
-    headers = {"User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app)"}
+    headers = {"User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app; contact@pitchzone.pl)"}
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=8) as res:
@@ -263,26 +290,39 @@ def load_white_logo(target_height=48):
         aspect = logo_img.width / max(1, logo_img.height)
         new_w = max(1, int(target_height * aspect))
         logo_img = logo_img.resize((new_w, target_height), Image.Resampling.LANCZOS)
-        # Odwrócenie ciemnego konturu na czysty biały (jak dark:invert na stronie)
         r, g, b, a = logo_img.split()
         white_layer = Image.new("RGBA", logo_img.size, (255, 255, 255, 255))
         white_layer.putalpha(a)
         return white_layer
     return None
 
+def download_image_rgba(url):
+    headers = {
+        "User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app; contact@pitchzone.pl) Python-urllib"
+    }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=12) as res:
+        return Image.open(io.BytesIO(res.read())).convert("RGBA")
+
 def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code, title, summary, output_path="social_card.png"):
-    """Tworzy w 100% legalną kartę graficzną 1080x1350 z prawdziwym logo, podpisem autora CC i źródłem."""
+    """Tworzy w 100% legalną kartę graficzną 1080x1350 z gwarantowanym zdjęciem, logo, pełnymi zdaniami i podpisem CC."""
     W, H = 1080, 1350
     canvas = Image.new("RGBA", (W, H), (8, 8, 12, 255))
 
-    # 1. Pobranie i dopasowanie tła zdjęciowego
-    try:
-        req = urllib.request.Request(img_url, headers={"User-Agent": "PitchZoneBot/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as res:
-            bg = Image.open(io.BytesIO(res.read())).convert("RGBA")
+    # 1. Pobranie tła (z automatycznym fallbackiem na Unsplash, żeby nigdy nie było czarnego tła)
+    bg = None
+    actual_credit = img_credit or "Unsplash (CC0)"
+    for candidate_url, candidate_credit in [(img_url, actual_credit), (FALLBACK_IMAGES[0], "Unsplash (CC0)")]:
+        try:
+            bg = download_image_rgba(candidate_url)
+            actual_credit = candidate_credit
+            break
+        except Exception as e:
+            print(f"Próba pobrania tła ({candidate_url}) nieudana: {e}")
 
+    if bg:
         target_ratio = W / (H * 0.72)
-        bg_ratio = bg.width / bg.height
+        bg_ratio = bg.width / max(1, bg.height)
         if bg_ratio > target_ratio:
             new_h = int(H * 0.72)
             new_w = int(new_h * bg_ratio)
@@ -294,10 +334,8 @@ def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code,
         left = max(0, (new_w - W) // 2)
         bg = bg.crop((left, 0, left + W, min(new_h, int(H * 0.72))))
         canvas.paste(bg, (0, 0))
-    except Exception as e:
-        print(f"Nie udało się pobrać tła do grafiki: {e}")
 
-    # 2. Ciemny gradient od góry i od dołu dla pełnej czytelności typografii
+    # 2. Ciemny gradient od góry i od dołu
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw_ov = ImageDraw.Draw(overlay)
     for y in range(210):
@@ -342,26 +380,45 @@ def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code,
     draw.text((85, badge_y + 9), badge_label, font=font_badge, fill=(255, 255, 255, 255))
 
     # 5. Główny nagłówek (łamany na max 4 linie)
-    font_title = load_font_safe(52, bold=True)
-    wrapped_title = textwrap.wrap(title, width=28)[:4]
-    curr_y = badge_y + 70
+    font_title = load_font_safe(50, bold=True)
+    wrapped_title = textwrap.wrap(title, width=29)[:4]
+    curr_y = badge_y + 66
     for line in wrapped_title:
         draw.text((64, curr_y), line, font=font_title, fill=(255, 255, 255, 255))
-        curr_y += 66
+        curr_y += 62
 
-    # 6. Zajawka (summary)
+    # 6. Zajawka (summary) — przycinana wyłącznie na pełnym zdaniu
     curr_y += 14
-    font_summary = load_font_safe(27, bold=False)
-    wrapped_sum = textwrap.wrap(summary, width=52)[:3]
-    for line in wrapped_sum:
-        draw.text((64, curr_y), line, font=font_summary, fill=(195, 195, 210, 255))
-        curr_y += 37
+    font_summary = load_font_safe(26, bold=False)
+    max_summary_y = H - 140
+    available_lines = max(1, (max_summary_y - curr_y) // 36)
 
-    # 7. Dolny pasek prawny: źródło informacji + wymóg licencyjny autora zdjęcia CC
+    clean_sum = (summary or "").strip()
+    wrapped_sum = textwrap.wrap(clean_sum, width=54)
+    if len(wrapped_sum) > available_lines:
+        sentences = re.split(r'(?<=[.!?])\s+', clean_sum)
+        chosen = ""
+        for s in sentences:
+            candidate = (chosen + " " + s).strip() if chosen else s
+            if len(textwrap.wrap(candidate, width=54)) <= available_lines:
+                chosen = candidate
+            else:
+                break
+        if chosen:
+            wrapped_sum = textwrap.wrap(chosen, width=54)
+        else:
+            wrapped_sum = textwrap.wrap(clean_sum, width=54)[:available_lines]
+            wrapped_sum[-1] = wrapped_sum[-1].rstrip(" ,;:-") + "..."
+
+    for line in wrapped_sum[:available_lines]:
+        draw.text((64, curr_y), line, font=font_summary, fill=(195, 195, 210, 255))
+        curr_y += 36
+
+    # 7. Dolny pasek prawny
     draw.line([(64, H - 112), (W - 64, H - 112)], fill=(45, 45, 60, 255), width=2)
     draw.rectangle([(64, H - 88), (71, H - 44)], fill=(168, 85, 247, 255))
     draw.text((86, H - 88), f"WIĘCEJ NA PITCH ZONE  •  ŹRÓDŁO: {source_name.upper()}", font=load_font_safe(19, bold=True), fill=(225, 225, 240, 255))
-    credit_label = (img_credit or "Unsplash (CC0)")[:65]
+    credit_label = actual_credit[:65]
     draw.text((86, H - 60), f"Zdjęcie: {credit_label} | Opracowanie informacyjne (art. 25 pr. aut.)", font=load_font_safe(15, bold=False), fill=(140, 140, 155, 255))
 
     canvas.convert("RGB").save(output_path, "PNG", optimize=True)
