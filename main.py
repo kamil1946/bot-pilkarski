@@ -101,15 +101,15 @@ def is_football_article(title, full_text=""):
     return not any(bad in t for bad in non_football_keywords)
 
 def detect_category(title, full_text="", default_cat=None):
-    # Najpierw sprawdzamy sam tytuł (ma najwyższy priorytet)
     t_title = (title or "").lower()
     t = (title + " " + full_text[:700]).lower()
     
-    if any(k in t for k in ["liga mistrzów", "champions league", "ucl"]):
+    # Dokładne dopasowanie europejskich pucharów (tylko pełne nazwy lub samodzielne skróty \buel\b)
+    if re.search(r'\b(liga mistrzów|champions league|ucl)\b', t_title) or re.search(r'\b(liga mistrzów|champions league|ucl)\b', t):
         return "CL", CATEGORY_META["CL"][0], CATEGORY_META["CL"][1]
-    if any(k in t for k in ["liga europy", "europa league", "uel"]):
+    if re.search(r'\b(liga europy|europa league|uel)\b', t_title) or re.search(r'\b(liga europy|europa league|uel)\b', t):
         return "EL", CATEGORY_META["EL"][0], CATEGORY_META["EL"][1]
-    if any(k in t for k in ["liga konferencji", "conference league", "uecl"]):
+    if re.search(r'\b(liga konferencji|conference league|uecl)\b', t_title) or re.search(r'\b(liga konferencji|conference league|uecl)\b', t):
         return "ECL", CATEGORY_META["ECL"][0], CATEGORY_META["ECL"][1]
 
     eks_keywords = [
@@ -146,7 +146,6 @@ def detect_category(title, full_text="", default_cat=None):
         "mainz", "augsburg", "st. pauli", "bochum", "heidenheim"
     ]
 
-    # Sprawdzamy najpierw sam tytuł, żeby treść poboczna nie myliła ligi
     for scope in (t_title, t):
         if any(k in scope for k in eks_keywords):
             return "EKS", CATEGORY_META["EKS"][0], CATEGORY_META["EKS"][1]
