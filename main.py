@@ -11,7 +11,6 @@ import time
 from datetime import datetime
 
 PROTO = "https" + "://"
-# Pamiętaj o ustawieniu w GitHub Secrets jako DISCORD_WEBHOOK (lub wklejeniu linku poniżej)
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip() or (PROTO + "discord.com/api/webhooks/TUTAJ_WKLEJ_NOWY_LINK")
 HISTORY_FILE = "sent_news.txt"
 
@@ -20,18 +19,25 @@ GITHUB_FILE_PATH = "news.json"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-# Połączona lista źródeł: polskie (Meczyki), główne brytyjskie oraz agregatory Google News dla La Ligi, Serie A i Bundesligi
-RSS_FEEDS = [
-    PROTO + "www.meczyki.pl/rss.xml",
-    PROTO + "feeds.bbci.co.uk/sport/football/rss.xml",
-    PROTO + "www.skysports.com/rss/11095",
-    PROTO + "www.skysports.com/rss/11711",  # La Liga
-    PROTO + "www.skysports.com/rss/12040",  # Serie A
-    PROTO + "www.skysports.com/rss/11881",  # Bundesliga
-    PROTO + "www.skysports.com/rss/11952",  # Transfery
-    PROTO + "news.google.com/rss/search?q=La+Liga+football&hl=en-US&gl=US&ceid=US:en",
-    PROTO + "news.google.com/rss/search?q=Serie+A+calcio&hl=en-US&gl=US&ceid=US:en",
-    PROTO + "news.google.com/rss/search?q=Bundesliga+fussball&hl=en-US&gl=US&ceid=US:en",
+# Dedykowane, legalne źródła RSS z przypisaniem do lig (name, url, default_cat, limit_per_run)
+RSS_SOURCES = [
+    # EKSTRAKLASA / POLSKA PIŁKA
+    ("Weszło", PROTO + "weszlo.com/feed/", "EKS", 2),
+    ("Goal.pl Ekstraklasa", PROTO + "www.goal.pl/kategoria/ekstraklasa/feed/", "EKS", 2),
+    ("Meczyki.pl", PROTO + "www.meczyki.pl/rss.xml", None, 2),
+
+    # SERIE A
+    ("Football Italia", PROTO + "football-italia.net/feed/", "SA", 3),
+
+    # BUNDESLIGA
+    ("Bulinews", PROTO + "bulinews.com/rss.xml", "BL", 3),
+
+    # LA LIGA
+    ("Football España", PROTO + "www.football-espana.net/feed", "LL", 3),
+
+    # PREMIER LEAGUE / EUROPA
+    ("BBC Sport", PROTO + "feeds.bbci.co.uk/sport/football/rss.xml", "PL", 2),
+    ("Sky Sports", PROTO + "www.skysports.com/rss/11095", "PL", 2),
 ]
 
 FALLBACK_IMAGES = [
@@ -41,6 +47,18 @@ FALLBACK_IMAGES = [
     PROTO + "images.unsplash.com/photo-1431324155629-1a6deb1dec8d?auto=format&fit=crop&w=1200&q=80",
 ]
 
+CATEGORY_META = {
+    "EKS": ("Ekstraklasa", "bg-rose-600"),
+    "BL": ("Bundesliga", "bg-amber-600"),
+    "LL": ("La Liga", "bg-red-600"),
+    "SA": ("Serie A", "bg-sky-600"),
+    "PL": ("Premier League", "bg-purple-600"),
+    "CL": ("Liga Mistrzów", "bg-indigo-600"),
+    "EL": ("Liga Europy", "bg-blue-600"),
+    "ECL": ("Liga Konferencji", "bg-teal-600"),
+    "OTHER": ("Inne Ligi", "bg-emerald-600"),
+}
+
 def load_sent_news():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -48,8 +66,10 @@ def load_sent_news():
     return set()
 
 def save_sent_news(sent_links):
+    # Zachowujemy ostatnie 1500 linków, żeby plik nie rósł w nieskończoność
+    links_list = list(sent_links)[-1500:]
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        for link in sent_links:
+        for link in links_list:
             f.write(f"{link}\n")
 
 def is_football_article(title, full_text=""):
@@ -66,42 +86,54 @@ def is_football_article(title, full_text=""):
         "skoki narciarskie", "stoch", "kubacki", "żyła", "małysz",
         "hokej", "nhl", "golf", "kolarstwo", "tour de france"
     ]
-    if any(bad in t for bad in non_football_keywords):
-        return False
-    return True
+    return not any(bad in t for bad in non_football_keywords)
 
-def detect_category(title, full_text=""):
-    t = (title + " " + full_text[:600]).lower()
+def detect_category(title, full_text="", default_cat=None):
+    t = (title + " " + full_text[:700]).lower()
     
-    # 1. Ekstraklasa / Polska Piłka (precyzyjne frazy, bez ogólników typu "motor")
+    # 0. Puchary europejskie (jeśli artykuł dotyczy bezpośrednio rozgrywek UEFA)
+    if any(k in t for k in ["liga mistrzów", "champions league", "ucl"]):
+        return "CL", *CATEGORY_META["CL"]
+    if any(k in t for k in ["liga europy", "europa league", "uel"]):
+        return "EL", *CATEGORY_META["EL"]
+    if any(k in t for k in ["liga konferencji", "conference league", "uecl"]):
+        return "ECL", *CATEGORY_META["ECL"]
+
+    # 1. Ekstraklasa (tylko precyzyjne nazwy klubów i rozgrywek Ekstraklasy)
     eks_keywords = [
-        "ekstraklasa", "pko bp ekstraklasa", "1. liga", "fortuna 1 liga", "betclic 1 liga", "puchar polski",
-        "reprezentacja polski", "pzpn", "kulesza",
-        "legia warszawa", "legia", "lech poznań", "raków częstochowa", "raków", "jagiellonia białystok", "jagiellonia",
-        "pogoń szczecin", "górnik zabrze", "śląsk wrocław", "cracovia", "widzew łódź", "widzew",
+        "ekstraklasa", "pko bp ekstraklasa", "puchar polski",
+        "legia warszawa", "lech poznań", "raków częstochowa", "jagiellonia białystok",
+        "pogoń szczecin", "górnik zabrze", "śląsk wrocław", "cracovia", "widzew łódź",
         "motor lublin", "piast gliwice", "korona kielce", "radomiak radom", "stal mielec",
-        "puszcza niepołomice", "zagłębie lubin", "gks katowice", "lechia gdańsk", "wisła kraków", "ruch chorzów"
+        "puszcza niepołomice", "zagłębie lubin", "gks katowice", "lechia gdańsk", "wisła kraków"
     ]
     if any(k in t for k in eks_keywords):
-        return "EKS", "Ekstraklasa / PL", "bg-rose-600"
+        return "EKS", *CATEGORY_META["EKS"]
         
     # 2. Bundesliga
-    if any(k in t for k in ["bundesliga", "bayern", "monachium", "munich", "borussia", "dortmund", "leverkusen", "bayer", "leipzig", "lipsk", "eintracht", "stuttgart", "wolfsburg", "werder", "brema", "union berlin"]):
-        return "BL", "Bundesliga", "bg-amber-600"
+    if any(k in t for k in ["bundesliga", "bayern", "monachium", "munich", "borussia", "dortmund", "leverkusen", "bayer", "leipzig", "lipsk", "eintracht", "stuttgart", "wolfsburg", "werder", "brema", "union berlin", "freiburg", "hoffenheim", "mainz", "augsburg", "st. pauli", "bochum", "heidenheim"]):
+        return "BL", *CATEGORY_META["BL"]
         
     # 3. La Liga
-    if any(k in t for k in ["la liga", "real madrid", "real madryt", "barcelona", "barca", "atletico", "atletico madryt", "mbappe", "vinicius", "yamal", "lewandowski", "szczęsny", "sevilla", "espanyol", "bilbao", "athletic", "sociedad", "villarreal", "valencia", "betis", "celta", "girona", "osasuna"]):
-        return "LL", "La Liga", "bg-red-600"
+    if any(k in t for k in ["la liga", "laliga", "real madrid", "real madryt", "barcelona", "barca", "atletico", "atlético", "mbappe", "mbappé", "vinicius", "yamal", "lewandowski", "szczęsny", "sevilla", "espanyol", "bilbao", "athletic club", "sociedad", "villarreal", "valencia", "betis", "celta", "girona", "osasuna", "mallorca", "getafe", "rayo vallecano"]):
+        return "LL", *CATEGORY_META["LL"]
         
     # 4. Serie A
-    if any(k in t for k in ["serie a", "juventus", "inter", "milan", "ac milan", "inter mediolan", "napoli", "roma", "as roma", "lazio", "atalanta", "fiorentina", "bologna", "torino", "monza", "udinese", "genoa", "cagliari", "verona", "zieliński", "zalewski"]):
-        return "SA", "Serie A", "bg-sky-600"
+    if any(k in t for k in ["serie a", "juventus", "inter", "milan", "ac milan", "inter mediolan", "napoli", "roma", "as roma", "lazio", "atalanta", "fiorentina", "bologna", "torino", "monza", "udinese", "genoa", "cagliari", "verona", "parma", "como", "empoli", "lecce", "venezia", "zieliński", "zalewski"]):
+        return "SA", *CATEGORY_META["SA"]
         
     # 5. Premier League
-    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves", "brentford", "nottingham", "ipswich", "leicester", "southampton", "kiwior", "cash", "bednarek"]):
-        return "PL", "Premier League", "bg-purple-600"
+    if any(k in t for k in ["premier league", "arsenal", "liverpool", "man utd", "manchester united", "man city", "manchester city", "chelsea", "tottenham", "newcastle", "aston villa", "everton", "west ham", "crystal palace", "brighton", "fulham", "bournemouth", "wolves", "wolverhampton", "brentford", "nottingham", "ipswich", "leicester", "southampton", "kiwior", "cash", "bednarek"]):
+        return "PL", *CATEGORY_META["PL"]
+
+    # Jeśli źródło było dedykowane konkretnej lidze (np. Football Italia / Bulinews), użyj jej jako domyślnej
+    if default_cat and default_cat in CATEGORY_META:
+        # Dla ogólnego Weszło bez słów kluczowych Ekstraklasy wpadnie do OTHER (Inne Ligi / Reprezentacja)
+        if default_cat == "EKS" and "ekstraklas" not in t and "liga" not in t:
+            return "OTHER", *CATEGORY_META["OTHER"]
+        return default_cat, *CATEGORY_META[default_cat]
         
-    return "OTHER", "Inne Ligi", "bg-emerald-600"
+    return "OTHER", *CATEGORY_META["OTHER"]
 
 def clean_html(raw_html):
     if not raw_html:
@@ -116,7 +148,6 @@ def is_valid_photo_url(url):
     return any(ext in lower for ext in [".jpg", ".jpeg", ".png"])
 
 def fetch_wikipedia_main_image(query_term):
-    """Pobiera główne zdjęcie z artykułu w Wikipedii (najlepsze źródło portretów piłkarzy)."""
     if not query_term or len(query_term.strip()) < 3:
         return None, None
 
@@ -149,7 +180,6 @@ def fetch_wikipedia_main_image(query_term):
     return None, None
 
 def fetch_wikimedia_commons_image(query_term):
-    """Przeszukuje bezpośrednio bazę multimediów Wikimedia Commons."""
     if not query_term or len(query_term.strip()) < 3:
         return None, None
 
@@ -191,27 +221,20 @@ def fetch_wikimedia_commons_image(query_term):
     return None, None
 
 def get_legal_article_image(player_name, club_or_topic, index=0):
-    """3-stopniowe dobieranie tematycznego legalnego zdjęcia: Piłkarz (Wiki) -> Piłkarz (Commons) -> Klub/Stadion -> Fallback CC0."""
     if player_name:
         img, credit = fetch_wikipedia_main_image(player_name)
         if img:
-            print(f"Znaleziono zdjęcie piłkarza (Wikipedia): {player_name}")
             return img, credit
-
         img, credit = fetch_wikimedia_commons_image(player_name)
         if img:
-            print(f"Znaleziono zdjęcie piłkarza (Commons): {player_name}")
             return img, credit
 
     if club_or_topic:
         img, credit = fetch_wikipedia_main_image(club_or_topic)
         if img:
-            print(f"Znaleziono zdjęcie tematyczne (Wikipedia): {club_or_topic}")
             return img, credit
-
         img, credit = fetch_wikimedia_commons_image(club_or_topic)
         if img:
-            print(f"Znaleziono zdjęcie tematyczne (Commons): {club_or_topic}")
             return img, credit
 
     fallback_url = FALLBACK_IMAGES[index % len(FALLBACK_IMAGES)]
@@ -231,7 +254,7 @@ def fetch_source_facts(url, fallback_summary):
         paragraphs = []
         for p in raw_paragraphs:
             text = clean_html(p)
-            if len(text) >= 100 and "football f1" not in text.lower() and "cookie" not in text.lower():
+            if len(text) >= 90 and "football f1" not in text.lower() and "cookie" not in text.lower():
                 if text not in paragraphs:
                     paragraphs.append(text)
             if len(paragraphs) >= 10:
@@ -279,7 +302,7 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models
         f'- "summary": zajawka 1-2 zdania po polsku z głównym faktem (max 190 znaków)\n'
         f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących szczegóły wydarzenia\n'
         f'- "player": pełne imię i nazwisko głównego piłkarza lub trenera w artykule po angielsku (np. "Harry Kane", "Mikel Arteta" lub "" jeśli brak osoby)\n'
-        f'- "topic": angielska nazwa głównego klubu, stadionu lub wydarzenia do wyszukania zdjęcia w Wikipedii (np. "Allianz Arena", "Arsenal F.C.", "Wembley Stadium")\n\n'
+        f'- "topic": angielska nazwa głównego klubu, stadionu lub wydarzenia do wyszukania zdjęcia w Wikipedii (np. "Allianz Arena", "Arsenal F.C.", "Legia Warsaw")\n\n'
         f"Oryginalny tytuł: {orig_title}\n"
         f"Treść artykułu źródłowego:\n{source_text[:3500]}"
     )
@@ -306,7 +329,7 @@ def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models
                     player_name = parsed.get("player", "")
                     topic_name = parsed.get("topic", "")
                     html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
-                    print(f"SUKCES Gemini ({model_name}): {pl_title} | Postać: {player_name} | Temat: {topic_name}")
+                    print(f"SUKCES Gemini ({model_name}): {pl_title}")
                     return pl_title, pl_summary, html_body, player_name, topic_name
             except urllib.error.HTTPError as he:
                 if he.code in (429, 503) and attempt == 0:
@@ -336,6 +359,19 @@ def send_to_discord(title, summary, link, source):
     except Exception:
         pass
 
+def balance_news_by_category(articles, max_per_category=8, max_total=45):
+    """Pilnuje, aby jedna liga (np. Premier League) nie wypchnęła z bazy innych rozgrywek."""
+    counts = {}
+    balanced = []
+    for art in articles:
+        cat = art.get("category", "OTHER")
+        if counts.get(cat, 0) < max_per_category:
+            balanced.append(art)
+            counts[cat] = counts.get(cat, 0) + 1
+        if len(balanced) >= max_total:
+            break
+    return balanced
+
 def push_news_to_website(new_articles):
     if not GH_TOKEN or not new_articles:
         return
@@ -354,23 +390,23 @@ def push_news_to_website(new_articles):
             sha = file_data["sha"]
             existing_news = json.loads(base64.b64decode(file_data["content"]).decode('utf-8'))
 
-        updated_news = new_articles + existing_news
-        updated_news = updated_news[:25]
+        combined = new_articles + existing_news
+        updated_news = balance_news_by_category(combined, max_per_category=8, max_total=45)
 
         encoded_content = base64.b64encode(
             json.dumps(updated_news, ensure_ascii=False, indent=2).encode('utf-8')
         ).decode('utf-8')
 
         payload = json.dumps({
-            "message": f"Auto-news PL: dodano {len(new_articles)} streszczeń ze zdjęciami tematycznymi",
+            "message": f"Auto-news PL: dodano {len(new_articles)} zbalansowanych artykułów",
             "content": encoded_content,
             "sha": sha
         }).encode('utf-8')
 
         put_req = urllib.request.Request(api_url, data=payload, headers=headers, method="PUT")
         urllib.request.urlopen(put_req)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Błąd zapisu news.json na GitHub: {e}")
 
 def check_news():
     sent_links = load_sent_news()
@@ -378,24 +414,15 @@ def check_news():
     website_batch = []
     models_list = get_available_flash_models()
 
-    for url in RSS_FEEDS:
+    for source, url, default_cat, limit_per_run in RSS_SOURCES:
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
             with urllib.request.urlopen(req, timeout=12) as response:
                 xml_data = response.read()
 
             root = ET.fromstring(xml_data)
-            
-            if "meczyki" in url:
-                source = "Meczyki.pl"
-            elif "bbci" in url:
-                source = "BBC Sport"
-            elif "news.google" in url:
-                source = "Prasa Zagraniczna"
-            else:
-                source = "Sky Sports"
+            items = root.findall('.//item')[:limit_per_run]
 
-            items = root.findall('.//item')[:3]
             for item in reversed(items):
                 title_elem = item.find('title')
                 link_elem = item.find('link')
@@ -407,14 +434,12 @@ def check_news():
                     rss_summary = clean_html(desc_elem.text) if desc_elem is not None else ""
 
                     if link not in sent_links:
-                        # Odrzucamy inne dyscypliny sportowe niż piłka nożna
                         if not is_football_article(orig_title, rss_summary):
-                            print(f"Pominięto (inny sport): {orig_title}")
                             sent_links.add(link)
                             continue
 
                         if new_sent_count > 0:
-                            time.sleep(5)
+                            time.sleep(4)
 
                         source_context = fetch_source_facts(link, rss_summary)
                         pl_title, pl_summary, pl_html_body, player_name, topic_name = summarize_in_polish_with_gemini(
@@ -427,7 +452,9 @@ def check_news():
                         sent_links.add(link)
                         new_sent_count += 1
 
-                        cat_code, badge_text, badge_color = detect_category(orig_title + " " + pl_title, pl_html_body)
+                        cat_code, badge_text, badge_color = detect_category(
+                            orig_title + " " + pl_title, pl_html_body, default_cat=default_cat
+                        )
                         now_str = datetime.now().strftime("%d.%m • %H:%M")
 
                         website_batch.insert(0, {
@@ -444,13 +471,12 @@ def check_news():
                         })
 
         except Exception as e:
-            print(f"Błąd przetwarzania kanału {url}: {e}")
+            print(f"Błąd przetwarzania kanału {source} ({url}): {e}")
 
     if new_sent_count > 0:
         save_sent_news(sent_links)
         push_news_to_website(website_batch)
     elif len(sent_links) > 0:
-        # Zapisz odrzucone linki z innych sportów, żeby bot nie sprawdzał ich ponownie
         save_sent_news(sent_links)
 
 if __name__ == "__main__":
