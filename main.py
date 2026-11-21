@@ -13,7 +13,6 @@ import textwrap
 import unicodedata
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
-import tweepy
 
 PROTO = "https" + "://"
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip()
@@ -26,17 +25,9 @@ LOGO_PATH = "logo-bramkarz.png"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-# Klucze X (Twitter) API z GitHub Secrets
-X_API_KEY = os.environ.get("X_API_KEY", "").strip()
-X_API_SECRET = os.environ.get("X_API_SECRET", "").strip()
-X_ACCESS_TOKEN = os.environ.get("X_ACCESS_TOKEN", "").strip()
-X_ACCESS_TOKEN_SECRET = os.environ.get("X_ACCESS_TOKEN_SECRET", "").strip()
-
-# Dedykowane, legalne źródła RSS z przypisaniem do lig (name, url, default_cat, limit_per_run)
+# Dedykowane, działające źródła RSS z przypisaniem do lig (name, url, default_cat, limit_per_run)
 RSS_SOURCES = [
     ("Weszło", PROTO + "weszlo.com/feed/", "EKS", 2),
-    ("Goal.pl Ekstraklasa", PROTO + "www.goal.pl/kategoria/ekstraklasa/feed/", "EKS", 2),
-    ("Meczyki.pl", PROTO + "www.meczyki.pl/rss.xml", None, 2),
     ("Football Italia", PROTO + "football-italia.net/feed/", "SA", 3),
     ("Bulinews", PROTO + "bulinews.com/rss.xml", "BL", 3),
     ("Football España", PROTO + "www.football-espana.net/feed", "LL", 3),
@@ -61,18 +52,6 @@ CATEGORY_META = {
     "EL": ("Liga Europy", "bg-blue-600", (37, 99, 235)),
     "ECL": ("Liga Konferencji", "bg-teal-600", (13, 148, 136)),
     "OTHER": ("Inne Ligi", "bg-emerald-600", (5, 150, 105)),
-}
-
-CATEGORY_HASHTAGS = {
-    "EKS": "#Ekstraklasa #PiłkaNożna",
-    "BL": "#Bundesliga #PiłkaNożna",
-    "LL": "#LaLiga #PiłkaNożna",
-    "SA": "#SerieA #PiłkaNożna",
-    "PL": "#PremierLeague #PiłkaNożna",
-    "CL": "#LigaMistrzów #UCL",
-    "EL": "#LigaEuropy #UEL",
-    "ECL": "#LigaKonferencji #UECL",
-    "OTHER": "#PiłkaNożna #Transfery",
 }
 
 def create_article_slug(title):
@@ -579,55 +558,6 @@ def send_to_discord_with_card(title, summary, portal_link, source, card_path):
     except Exception:
         pass
 
-def send_to_x_with_card(title, summary, portal_link, cat_code, card_path):
-    """Publikuje newsa na koncie X (@PitchZ0NE) z kartą graficzną 1080x1350."""
-    if not (X_API_KEY and X_API_SECRET and X_ACCESS_TOKEN and X_ACCESS_TOKEN_SECRET):
-        return
-
-    hashtags = CATEGORY_HASHTAGS.get(cat_code, "#PiłkaNożna")
-    header = f"⚽ {title.strip()}"
-    footer = f"{hashtags}\n🔗 {portal_link}"
-
-    # X liczy każdy link jako 23 znaki; zostawiamy bezpieczny zapas do limitu 280 znaków
-    avail_for_summary = 250 - len(header) - len(hashtags) - 8
-    clean_sum = (summary or "").strip()
-
-    if avail_for_summary >= 45 and clean_sum:
-        if len(clean_sum) > avail_for_summary:
-            clean_sum = clean_sum[:avail_for_summary - 1].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
-        tweet_text = f"{header}\n\n{clean_sum}\n\n{footer}"
-    else:
-        tweet_text = f"{header}\n\n{footer}"
-
-    try:
-        client = tweepy.Client(
-            consumer_key=X_API_KEY,
-            consumer_secret=X_API_SECRET,
-            access_token=X_ACCESS_TOKEN,
-            access_token_secret=X_ACCESS_TOKEN_SECRET
-        )
-
-        media_ids = None
-        if card_path and os.path.exists(card_path):
-            try:
-                auth = tweepy.OAuth1UserHandler(
-                    X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
-                )
-                api_v1 = tweepy.API(auth)
-                media = api_v1.media_upload(filename=card_path)
-                media_ids = [media.media_id]
-            except Exception as me:
-                print(f"Ostrzeżenie X (upload grafiki nieudany, wysyłam sam tekst): {me}")
-
-        if media_ids:
-            client.create_tweet(text=tweet_text, media_ids=media_ids)
-        else:
-            client.create_tweet(text=tweet_text)
-
-        print(f"SUKCES X: opublikowano -> {title}")
-    except Exception as xe:
-        print(f"Błąd publikacji na X: {xe}")
-
 def balance_news_by_category(articles, max_per_category=8, max_total=45):
     counts = {}
     balanced = []
@@ -729,7 +659,6 @@ def check_news():
 
                         portal_direct_link = f"{SITE_URL}/?news={create_article_slug(pl_title)}"
                         send_to_discord_with_card(pl_title, pl_summary, portal_direct_link, source, card_path)
-                        send_to_x_with_card(pl_title, pl_summary, portal_direct_link, cat_code, card_path)
 
                         sent_links.add(link)
                         new_sent_count += 1
