@@ -13,6 +13,7 @@ import textwrap
 import unicodedata
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
+import tweepy
 
 PROTO = "https" + "://"
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "").strip()
@@ -24,6 +25,12 @@ SITE_URL = "https://strona-bot-pilkarski.vercel.app"
 LOGO_PATH = "logo-bramkarz.png"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+
+# Klucze X (Twitter) API z GitHub Secrets
+X_API_KEY = os.environ.get("X_API_KEY", "").strip()
+X_API_SECRET = os.environ.get("X_API_SECRET", "").strip()
+X_ACCESS_TOKEN = os.environ.get("X_ACCESS_TOKEN", "").strip()
+X_ACCESS_TOKEN_SECRET = os.environ.get("X_ACCESS_TOKEN_SECRET", "").strip()
 
 # Dedykowane, legalne źródła RSS z przypisaniem do lig (name, url, default_cat, limit_per_run)
 RSS_SOURCES = [
@@ -56,6 +63,18 @@ CATEGORY_META = {
     "OTHER": ("Inne Ligi", "bg-emerald-600", (5, 150, 105)),
 }
 
+CATEGORY_HASHTAGS = {
+    "EKS": "#Ekstraklasa #PiłkaNożna",
+    "BL": "#Bundesliga #PiłkaNożna",
+    "LL": "#LaLiga #PiłkaNożna",
+    "SA": "#SerieA #PiłkaNożna",
+    "PL": "#PremierLeague #PiłkaNożna",
+    "CL": "#LigaMistrzów #UCL",
+    "EL": "#LigaEuropy #UEL",
+    "ECL": "#LigaKonferencji #UECL",
+    "OTHER": "#PiłkaNożna #Transfery",
+}
+
 def create_article_slug(title):
     s = (title or "").lower().replace("ł", "l")
     s = unicodedata.normalize("NFD", s)
@@ -78,7 +97,6 @@ def save_sent_news(sent_links):
 def is_football_article(title, full_text=""):
     t = (title + " " + full_text[:400]).lower()
 
-    # 1. Twarda blokada spamu, linków do Telegrama, kasyn i reklam
     spam_keywords = [
         "t.me/", "telegram", "join our channel", "lootmudra", "free earning",
         "promo code", "airdrop", "crypto", "casino", "kasyno", "giveaway",
@@ -87,7 +105,6 @@ def is_football_article(title, full_text=""):
     if any(spam in t for spam in spam_keywords):
         return False
 
-    # 2. Blokada innych dyscyplin sportowych
     non_football_keywords = [
         "tenis", "tennis", "iga świątek", "hubert hurkacz", "wta", "atp", "roland garros", "wimbledon",
         "formuła 1", "formula 1", "f1", "verstappen", "hamilton", "leclerc", "grand prix",
@@ -104,7 +121,6 @@ def detect_category(title, full_text="", default_cat=None):
     t_title = (title or "").lower()
     t = (title + " " + full_text[:700]).lower()
     
-    # Dokładne dopasowanie europejskich pucharów (tylko pełne nazwy lub samodzielne skróty \buel\b)
     if re.search(r'\b(liga mistrzów|champions league|ucl)\b', t_title) or re.search(r'\b(liga mistrzów|champions league|ucl)\b', t):
         return "CL", CATEGORY_META["CL"][0], CATEGORY_META["CL"][1]
     if re.search(r'\b(liga europy|europa league|uel)\b', t_title) or re.search(r'\b(liga europy|europa league|uel)\b', t):
@@ -273,7 +289,6 @@ def load_font_safe(size, bold=True):
     return ImageFont.load_default()
 
 def load_white_logo(target_height=48):
-    """Wczytuje prawdziwe logo (logo-bramkarz.png), skaluje do mniejszego rozmiaru i zmienia na białe."""
     logo_img = None
     try:
         if os.path.exists(LOGO_PATH):
@@ -304,11 +319,9 @@ def download_image_rgba(url):
         return Image.open(io.BytesIO(res.read())).convert("RGBA")
 
 def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code, title, summary, output_path="social_card.png"):
-    """Tworzy w 100% legalną kartę graficzną 1080x1350 z gwarantowanym zdjęciem, logo, pełnymi zdaniami i podpisem CC."""
     W, H = 1080, 1350
     canvas = Image.new("RGBA", (W, H), (8, 8, 12, 255))
 
-    # 1. Pobranie tła (z automatycznym fallbackiem na Unsplash, żeby nigdy nie było czarnego tła)
     bg = None
     actual_credit = img_credit or "Unsplash (CC0)"
     for candidate_url, candidate_credit in [(img_url, actual_credit), (FALLBACK_IMAGES[0], "Unsplash (CC0)")]:
@@ -334,7 +347,6 @@ def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code,
         bg = bg.crop((left, 0, left + W, min(new_h, int(H * 0.72))))
         canvas.paste(bg, (0, 0))
 
-    # 2. Ciemny gradient od góry i od dołu
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw_ov = ImageDraw.Draw(overlay)
     for y in range(210):
@@ -354,7 +366,6 @@ def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code,
     canvas = Image.alpha_composite(canvas, overlay)
     draw = ImageDraw.Draw(canvas)
 
-    # 3. Górny branding: prawdziwe pomniejszone logo (48px) + PITCH ZONE (bez napisu LIVE)
     text_start_x = 64
     logo_img = load_white_logo(target_height=48)
     if logo_img:
@@ -368,7 +379,6 @@ def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code,
     draw.text((text_start_x + pitch_w + 12, 50), "ZONE", font=font_brand, fill=(168, 85, 247, 255))
     draw.text((text_start_x, 96), "SERWIS PIŁKARSKI", font=font_sub, fill=(185, 185, 200, 255))
 
-    # 4. Kolorowy badge ligi
     badge_rgb = CATEGORY_META.get(cat_code, CATEGORY_META["PL"])[2]
     badge_label = badge_text.upper()
     font_badge = load_font_safe(23, bold=True)
@@ -378,7 +388,6 @@ def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code,
     draw.rounded_rectangle([(64, badge_y), (64 + b_w, badge_y + 46)], radius=23, fill=(*badge_rgb, 255))
     draw.text((85, badge_y + 9), badge_label, font=font_badge, fill=(255, 255, 255, 255))
 
-    # 5. Główny nagłówek (łamany na max 4 linie)
     font_title = load_font_safe(50, bold=True)
     wrapped_title = textwrap.wrap(title, width=29)[:4]
     curr_y = badge_y + 66
@@ -386,7 +395,6 @@ def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code,
         draw.text((64, curr_y), line, font=font_title, fill=(255, 255, 255, 255))
         curr_y += 62
 
-    # 6. Zajawka (summary) — przycinana wyłącznie na pełnym zdaniu
     curr_y += 14
     font_summary = load_font_safe(26, bold=False)
     max_summary_y = H - 140
@@ -413,7 +421,6 @@ def generate_social_card(img_url, img_credit, source_name, badge_text, cat_code,
         draw.text((64, curr_y), line, font=font_summary, fill=(195, 195, 210, 255))
         curr_y += 36
 
-    # 7. Dolny pasek prawny
     draw.line([(64, H - 112), (W - 64, H - 112)], fill=(45, 45, 60, 255), width=2)
     draw.rectangle([(64, H - 88), (71, H - 44)], fill=(168, 85, 247, 255))
     draw.text((86, H - 88), f"WIĘCEJ NA PITCH ZONE  •  ŹRÓDŁO: {source_name.upper()}", font=load_font_safe(19, bold=True), fill=(225, 225, 240, 255))
@@ -562,7 +569,6 @@ def send_to_discord_with_card(title, summary, portal_link, source, card_path):
         except Exception as e:
             print(f"Błąd wysyłki grafiki na Discord: {e}")
 
-    # Fallback tekstowy
     req = urllib.request.Request(
         WEBHOOK_URL,
         data=json.dumps({"content": content_text}).encode('utf-8'),
@@ -572,6 +578,55 @@ def send_to_discord_with_card(title, summary, portal_link, source, card_path):
         urllib.request.urlopen(req)
     except Exception:
         pass
+
+def send_to_x_with_card(title, summary, portal_link, cat_code, card_path):
+    """Publikuje newsa na koncie X (@PitchZ0NE) z kartą graficzną 1080x1350."""
+    if not (X_API_KEY and X_API_SECRET and X_ACCESS_TOKEN and X_ACCESS_TOKEN_SECRET):
+        return
+
+    hashtags = CATEGORY_HASHTAGS.get(cat_code, "#PiłkaNożna")
+    header = f"⚽ {title.strip()}"
+    footer = f"{hashtags}\n🔗 {portal_link}"
+
+    # X liczy każdy link jako 23 znaki; zostawiamy bezpieczny zapas do limitu 280 znaków
+    avail_for_summary = 250 - len(header) - len(hashtags) - 8
+    clean_sum = (summary or "").strip()
+
+    if avail_for_summary >= 45 and clean_sum:
+        if len(clean_sum) > avail_for_summary:
+            clean_sum = clean_sum[:avail_for_summary - 1].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+        tweet_text = f"{header}\n\n{clean_sum}\n\n{footer}"
+    else:
+        tweet_text = f"{header}\n\n{footer}"
+
+    try:
+        client = tweepy.Client(
+            consumer_key=X_API_KEY,
+            consumer_secret=X_API_SECRET,
+            access_token=X_ACCESS_TOKEN,
+            access_token_secret=X_ACCESS_TOKEN_SECRET
+        )
+
+        media_ids = None
+        if card_path and os.path.exists(card_path):
+            try:
+                auth = tweepy.OAuth1UserHandler(
+                    X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
+                )
+                api_v1 = tweepy.API(auth)
+                media = api_v1.media_upload(filename=card_path)
+                media_ids = [media.media_id]
+            except Exception as me:
+                print(f"Ostrzeżenie X (upload grafiki nieudany, wysyłam sam tekst): {me}")
+
+        if media_ids:
+            client.create_tweet(text=tweet_text, media_ids=media_ids)
+        else:
+            client.create_tweet(text=tweet_text)
+
+        print(f"SUKCES X: opublikowano -> {title}")
+    except Exception as xe:
+        print(f"Błąd publikacji na X: {xe}")
 
 def balance_news_by_category(articles, max_per_category=8, max_total=45):
     counts = {}
@@ -664,7 +719,6 @@ def check_news():
                             orig_title + " " + pl_title, pl_html_body, default_cat=default_cat
                         )
 
-                        # Generowanie karty graficznej 1080x1350 do social mediów
                         card_path = None
                         try:
                             card_path = generate_social_card(
@@ -675,6 +729,7 @@ def check_news():
 
                         portal_direct_link = f"{SITE_URL}/?news={create_article_slug(pl_title)}"
                         send_to_discord_with_card(pl_title, pl_summary, portal_direct_link, source, card_path)
+                        send_to_x_with_card(pl_title, pl_summary, portal_direct_link, cat_code, card_path)
 
                         sent_links.add(link)
                         new_sent_count += 1
