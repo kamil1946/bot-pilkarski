@@ -20,7 +20,7 @@ HISTORY_FILE = "sent_news.txt"
 
 GITHUB_REPO = "kamil1946/strona-bot-pilkarski"
 GITHUB_FILE_PATH = "news.json"
-SITE_URL = "https://strona-bot-pilkarski.vercel.app"
+SITE_URL = "https://pitchzone.pl"
 LOGO_PATH = "logo-bramkarz.png"
 GH_TOKEN = os.environ.get("GH_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
