@@ -73,6 +73,29 @@ def save_sent_news(sent_links):
         for link in links_list:
             f.write(f"{link}\n")
 
+def fallback_translate_to_pl(text):
+    """Darmowy tłumacz awaryjny (bez dodatkowych bibliotek), gdy Gemini API jest niedostępne."""
+    if not text or not text.strip():
+        return ""
+    try:
+        clean_text = text.strip()[:1800]
+        params = urllib.parse.urlencode({
+            "client": "gtx",
+            "sl": "auto",
+            "tl": "pl",
+            "dt": "t",
+            "q": clean_text
+        })
+        url = f"{PROTO}translate.googleapis.com/translate_a/single?{params}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            translated = "".join(part[0] for part in data[0] if part and part[0])
+            return translated.strip() or text
+    except Exception as e:
+        print(f"Błąd tłumacza awaryjnego: {e}")
+        return text
+
 def is_football_article(title, full_text=""):
     t = (title + " " + full_text[:400]).lower()
 
@@ -186,7 +209,7 @@ def fetch_wikipedia_main_image(query_term):
         "pilicense": "free"
     })
     url = f"{PROTO}en.wikipedia.org/w/api.php?{params}"
-    headers = {"User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app; contact@pitchzone.pl)"}
+    headers = {"User-Agent": "PitchZoneBot/1.0 (https://pitchzone.pl; contact@pitchzone.pl)"}
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=8) as res:
@@ -217,7 +240,7 @@ def fetch_wikimedia_commons_image(query_term):
         "iiurlwidth": "1000"
     })
     url = f"{PROTO}commons.wikimedia.org/w/api.php?{params}"
-    headers = {"User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app; contact@pitchzone.pl)"}
+    headers = {"User-Agent": "PitchZoneBot/1.0 (https://pitchzone.pl; contact@pitchzone.pl)"}
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=8) as res:
@@ -291,7 +314,7 @@ def load_white_logo(target_height=48):
 
 def download_image_rgba(url):
     headers = {
-        "User-Agent": "PitchZoneBot/1.0 (https://strona-bot-pilkarski.vercel.app; contact@pitchzone.pl) Python-urllib"
+        "User-Agent": "PitchZoneBot/1.0 (https://pitchzone.pl; contact@pitchzone.pl) Python-urllib"
     }
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=12) as res:
@@ -436,9 +459,10 @@ def fetch_source_facts(url, fallback_summary):
     return fallback_summary
 
 def get_available_flash_models():
-    fallback_models = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
+    fallback_models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-2.0-flash"]
     if not GEMINI_API_KEY:
-        return fallback_models
+        print("UWAGA: Brak klucza GEMINI_API_KEY w zmiennych środowiskowych! Używam tłumacza awaryjnego.")
+        return []
     try:
         list_url = PROTO + f"generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
         req = urllib.request.Request(list_url)
@@ -448,69 +472,77 @@ def get_available_flash_models():
             for m in data.get("models", []):
                 name = m.get("name", "").replace("models/", "")
                 methods = m.get("supportedGenerationMethods", [])
-                if "generateContent" in methods and "flash" in name and "2.0" not in name and "2.5-flash" != name:
+                if "generateContent" in methods and "flash" in name and "thinking" not in name:
                     found.append(name)
             if found:
-                found.sort(key=lambda x: (0 if "lite" in x or "latest" in x else 1, x))
+                found.sort(key=lambda x: (0 if "2.5-flash" in x else 1, x))
                 return found[:4]
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Nie udało się pobrać listy modeli Gemini: {e}")
     return fallback_models
 
 def summarize_in_polish_with_gemini(orig_title, source_text, source_name, models_list):
-    if not GEMINI_API_KEY:
-        return orig_title, source_text[:180], f"<p>{source_text[:300]}</p>", "", ""
+    if GEMINI_API_KEY and models_list:
+        prompt = (
+            f"Jesteś redaktorem polskiego portalu piłkarskiego PITCH ZONE.\n"
+            f"Na podstawie poniższego artykułu ze źródła ({source_name}) napisz konkretne, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
+            f"Wymagania:\n"
+            f"1. Wyciągnij najważniejsze detale z tekstu: nazwiska piłkarzy i trenerów, nazwy klubów, dokładny powód (np. jaka kontuzja, na ile wypada, jaki wynik, co dokładnie powiedział trener).\n"
+            f"2. Całość (title, summary, paragraphs) MUSI być napisana wyłącznie w języku polskim.\n"
+            f"3. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown) z pięcioma polami:\n"
+            f'- "title": dynamiczny nagłówek po polsku (max 85 znaków)\n'
+            f'- "summary": zajawka 1-2 zdania po polsku z głównym faktem (max 190 znaków)\n'
+            f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących szczegóły wydarzenia\n'
+            f'- "player": pełne imię i nazwisko głównego piłkarza lub trenera w artykule po angielsku (np. "Harry Kane", "Mikel Arteta" lub "" jeśli brak osoby)\n'
+            f'- "topic": angielska nazwa głównego klubu, stadionu lub wydarzenia do wyszukania zdjęcia w Wikipedii (np. "Allianz Arena", "Arsenal F.C.", "Legia Warsaw")\n\n'
+            f"Oryginalny tytuł: {orig_title}\n"
+            f"Treść artykułu źródłowego:\n{source_text[:3500]}"
+        )
 
-    prompt = (
-        f"Jesteś redaktorem polskiego portalu piłkarskiego PITCH ZONE.\n"
-        f"Na podstawie poniższego artykułu ze źródła ({source_name}) napisz konkretne, autorskie podsumowanie faktów po polsku własnymi słowami (nie kopiuj dosłownie zdań z oryginału).\n\n"
-        f"Wymagania:\n"
-        f"1. Wyciągnij najważniejsze detale z tekstu: nazwiska piłkarzy i trenerów, nazwy klubów, dokładny powód (np. jaka kontuzja, na ile wypada, jaki wynik, co dokładnie powiedział trener).\n"
-        f"2. Zwróć odpowiedź WYŁĄCZNIE jako czysty obiekt JSON (bez znaczników markdown) z pięcioma polami:\n"
-        f'- "title": dynamiczny nagłówek po polsku (max 85 znaków)\n'
-        f'- "summary": zajawka 1-2 zdania po polsku z głównym faktem (max 190 znaków)\n'
-        f'- "paragraphs": lista 3 konkretnych akapitów po polsku opisujących szczegóły wydarzenia\n'
-        f'- "player": pełne imię i nazwisko głównego piłkarza lub trenera w artykule po angielsku (np. "Harry Kane", "Mikel Arteta" lub "" jeśli brak osoby)\n'
-        f'- "topic": angielska nazwa głównego klubu, stadionu lub wydarzenia do wyszukania zdjęcia w Wikipedii (np. "Allianz Arena", "Arsenal F.C.", "Legia Warsaw")\n\n'
-        f"Oryginalny tytuł: {orig_title}\n"
-        f"Treść artykułu źródłowego:\n{source_text[:3500]}"
-    )
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.4}
+        }).encode('utf-8')
 
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4}
-    }).encode('utf-8')
+        for model_name in models_list:
+            api_url = PROTO + f"generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            for attempt in range(2):
+                try:
+                    req = urllib.request.Request(api_url, data=payload, headers={'Content-Type': 'application/json'})
+                    with urllib.request.urlopen(req, timeout=30) as res:
+                        data = json.loads(res.read().decode('utf-8'))
+                        raw_reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        raw_reply = re.sub(r'^```json\s*|\s*```$', '', raw_reply, flags=re.IGNORECASE).strip()
+                        parsed = json.loads(raw_reply)
 
-    for model_name in models_list:
-        api_url = PROTO + f"generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        for attempt in range(2):
-            try:
-                req = urllib.request.Request(api_url, data=payload, headers={'Content-Type': 'application/json'})
-                with urllib.request.urlopen(req, timeout=30) as res:
-                    data = json.loads(res.read().decode('utf-8'))
-                    raw_reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    raw_reply = re.sub(r'^```json\s*|\s*```$', '', raw_reply, flags=re.IGNORECASE).strip()
-                    parsed = json.loads(raw_reply)
+                        pl_title = parsed.get("title", "").strip()
+                        pl_summary = parsed.get("summary", "").strip()
+                        paragraphs = parsed.get("paragraphs", [])
+                        player_name = parsed.get("player", "")
+                        topic_name = parsed.get("topic", "")
 
-                    pl_title = parsed.get("title", orig_title)
-                    pl_summary = parsed.get("summary", "")
-                    paragraphs = parsed.get("paragraphs", [])
-                    player_name = parsed.get("player", "")
-                    topic_name = parsed.get("topic", "")
-                    html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
-                    print(f"SUKCES Gemini ({model_name}): {pl_title}")
-                    return pl_title, pl_summary, html_body, player_name, topic_name
-            except urllib.error.HTTPError as he:
-                if he.code in (429, 503) and attempt == 0:
-                    time.sleep(8)
-                    continue
-                if he.code == 404:
+                        if pl_title and pl_summary:
+                            html_body = "".join(f"<p>{p}</p>" for p in paragraphs) if paragraphs else f"<p>{pl_summary}</p>"
+                            print(f"SUKCES Gemini ({model_name}): {pl_title}")
+                            return pl_title, pl_summary, html_body, player_name, topic_name
+                except urllib.error.HTTPError as he:
+                    print(f"Błąd HTTP Gemini ({model_name}): {he.code}")
+                    if he.code in (429, 503) and attempt == 0:
+                        time.sleep(8)
+                        continue
                     break
-                break
-            except Exception:
-                break
+                except Exception as e:
+                    print(f"Błąd Gemini ({model_name}): {e}")
+                    break
 
-    return orig_title, source_text[:180], f"<p>{source_text[:350]}</p>", "", ""
+    # AWARYJNE TŁUMACZENIE NA POLSKI (gwarantuje polski tekst nawet bez klucza/limitu Gemini)
+    print(f"Używam awaryjnego tłumaczenia PL dla: {orig_title}")
+    pl_title = fallback_translate_to_pl(orig_title)
+    pl_full = fallback_translate_to_pl(source_text[:1200])
+    sentences = re.split(r'(?<=[.!?])\s+', pl_full)
+    pl_summary = " ".join(sentences[:2])[:210] if sentences else pl_full[:200]
+    html_body = "".join(f"<p>{s}</p>" for s in sentences[:5] if s.strip()) or f"<p>{pl_full}</p>"
+    return pl_title, pl_summary, html_body, "", orig_title
 
 def send_to_discord_with_card(title, summary, portal_link, source, card_path):
     if not WEBHOOK_URL or "TUTAJ_WKLEJ" in WEBHOOK_URL:
